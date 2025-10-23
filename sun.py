@@ -1277,13 +1277,17 @@ with tab2:
             help="Sélectionnez la région où sera installé le système solaire. Le pourcentage de main d'œuvre sera appliqué automatiquement."
         )
         
-        # Récupération du taux accessoires depuis les paramètres admin
-        taux_accessoires_admin = get_accessories_rate()
+        # Récupération du taux accessoires depuis les paramètres admin (extrait valeur numérique)
+        taux_accessoires_admin_data = get_accessories_rate()
+        if isinstance(taux_accessoires_admin_data, dict):
+            taux_accessoires_admin = taux_accessoires_admin_data.get('rate')
+        else:
+            taux_accessoires_admin = taux_accessoires_admin_data
         if taux_accessoires_admin is None:
             initialize_accessories_rate_in_firebase({'rate': TAUX_ACCESSOIRES_DEFAUT})
             taux_accessoires_admin = TAUX_ACCESSOIRES_DEFAUT
         
-        devis = calculer_devis(st.session_state.equipements, use_online=False, accessoires_rate=taux_accessoires_admin/100.0, region_selectionnee=region_selectionnee)
+        devis = calculer_devis(st.session_state.equipements, use_online=False, accessoires_rate=float(taux_accessoires_admin)/100.0, region_selectionnee=region_selectionnee)
         
         # Résumé du système
         st.markdown("### 📋 Résumé de votre installation")
@@ -1764,8 +1768,12 @@ L'utilisateur a dimensionné une installation avec:
         
         st.subheader("🎛️ Options d'équipements avec totaux")
         
-        # Récupération du taux accessoires depuis les paramètres admin
-        options_accessoires_pct = get_accessories_rate()
+        # Récupération du taux accessoires depuis les paramètres admin (extrait valeur numérique)
+        options_accessoires_data = get_accessories_rate()
+        if isinstance(options_accessoires_data, dict):
+            options_accessoires_pct = options_accessoires_data.get('rate')
+        else:
+            options_accessoires_pct = options_accessoires_data
         if options_accessoires_pct is None:
             initialize_accessories_rate_in_firebase({'rate': TAUX_ACCESSOIRES_DEFAUT})
             options_accessoires_pct = TAUX_ACCESSOIRES_DEFAUT
@@ -1796,9 +1804,9 @@ L'utilisateur a dimensionné une installation avec:
                 choix_opt['type_regulateur'] = opt['type_regulateur']
 
             equip_opt = selectionner_equipements(dim_opt, choix_opt)
-            # S'assurer que options_accessoires_pct n'est jamais None
+            # S'assurer que options_accessoires_pct n'est jamais None et convertir en float
             taux_accessoires_final = options_accessoires_pct if options_accessoires_pct is not None else TAUX_ACCESSOIRES_DEFAUT
-            devis_opt = calculer_devis(equip_opt, use_online=False, accessoires_rate=taux_accessoires_final/100.0)
+            devis_opt = calculer_devis(equip_opt, use_online=False, accessoires_rate=float(taux_accessoires_final)/100.0)
             with st.expander(f"{opt['nom']} – Total: {devis_opt['total']:,} FCFA", expanded=False):
                 st.markdown(f"• Batterie: {opt['type_batterie']}")
                 st.markdown(f"• Onduleur: {opt['type_onduleur']}")
@@ -2250,10 +2258,14 @@ if is_user_authenticated() and is_admin_user():
             
             # Récupérer le taux actuel depuis Firebase
             try:
-                taux_actuel = get_accessories_rate()
+                taux_data = get_accessories_rate()
+                if isinstance(taux_data, dict):
+                    taux_actuel = taux_data.get('rate')
+                else:
+                    taux_actuel = taux_data
                 if taux_actuel is None:
                     # Initialiser avec la valeur par défaut si aucune donnée n'existe
-                    success, message = initialize_accessories_rate_in_firebase(TAUX_ACCESSOIRES_DEFAUT)
+                    success, message = initialize_accessories_rate_in_firebase({'rate': TAUX_ACCESSOIRES_DEFAUT})
                     if success:
                         taux_actuel = TAUX_ACCESSOIRES_DEFAUT
                         st.info("✅ Taux accessoires initialisé avec la valeur par défaut")
@@ -2290,7 +2302,7 @@ if is_user_authenticated() and is_admin_user():
                 # Traitement des actions
                 if submit_button:
                     try:
-                        if save_accessories_rate(nouveau_taux):
+                        if save_accessories_rate({'rate': nouveau_taux}):
                             clear_accessories_rate_cache()  # Vider le cache pour afficher les nouvelles données
                             st.success("✅ Taux accessoires sauvegardé avec succès!")
                             st.rerun()
@@ -2301,7 +2313,7 @@ if is_user_authenticated() and is_admin_user():
                 
                 if reset_button:
                     try:
-                        if save_accessories_rate(TAUX_ACCESSOIRES_DEFAUT):
+                        if save_accessories_rate({'rate': TAUX_ACCESSOIRES_DEFAUT}):
                             clear_accessories_rate_cache()  # Vider le cache pour afficher les nouvelles données
                             st.success("✅ Taux accessoires réinitialisé à la valeur par défaut!")
                             st.rerun()
