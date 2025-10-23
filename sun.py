@@ -19,25 +19,99 @@ from firebase_config import (
     initialize_accessories_rate_in_firebase, get_change_history
 )
 
-# Fonction pour obtenir les prix actuels (Firebase uniquement)
+# Fonctions pour charger les données depuis les secrets
+@st.cache_data(ttl=3600)
+def get_equipment_prices_from_secrets():
+    """Charge les prix des équipements depuis les secrets Streamlit"""
+    try:
+        return dict(st.secrets["equipment_prices"])
+    except Exception as e:
+        st.error(f"Erreur lors du chargement des prix depuis les secrets: {e}")
+        return {}
+
+@st.cache_data(ttl=3600)
+def get_labor_percentages_from_secrets():
+    """Charge les pourcentages de main d'œuvre depuis les secrets Streamlit"""
+    try:
+        return dict(st.secrets["labor_percentages"])
+    except Exception as e:
+        st.error(f"Erreur lors du chargement des pourcentages de main d'œuvre depuis les secrets: {e}")
+        return {}
+
+@st.cache_data(ttl=3600)
+def get_accessories_rate_from_secrets():
+    """Charge le taux d'accessoires depuis les secrets Streamlit"""
+    try:
+        return st.secrets["accessories_rate"]
+    except Exception as e:
+        st.error(f"Erreur lors du chargement du taux d'accessoires depuis les secrets: {e}")
+        return 15.0
+
+@st.cache_data(ttl=3600)
+def get_company_info_from_secrets():
+    """Charge les informations de l'entreprise depuis les secrets Streamlit"""
+    try:
+        return dict(st.secrets["company_info"])
+    except Exception as e:
+        st.error(f"Erreur lors du chargement des informations de l'entreprise depuis les secrets: {e}")
+        return {}
+
+@st.cache_data(ttl=3600)
+def get_calculation_formulas_from_secrets():
+    """Récupère les formules mathématiques depuis les secrets Streamlit"""
+    try:
+        return dict(st.secrets["calculation_formulas"])
+    except Exception as e:
+        st.error(f"Erreur lors du chargement des formules de calcul depuis les secrets: {e}")
+        # Valeurs par défaut si les secrets ne sont pas disponibles
+        return {
+            "surface_par_kwc_m2": 5.0,
+            "marge_implantation_surface_pct": 10.0,
+            "pr_performance_ratio": 0.80,
+            "facteur_perte_panneaux": 0.25,
+            "facteur_production_solaire": 0.75,
+            "ensoleillement_senegal": {
+                "janvier": 6.2, "fevrier": 6.5, "mars": 6.7, "avril": 6.6,
+                "mai": 6.5, "juin": 6.0, "juillet": 5.5, "aout": 5.4,
+                "septembre": 5.8, "octobre": 6.0, "novembre": 6.2, "decembre": 6.1
+            },
+            "jours_par_mois": {
+                "janvier": 31, "fevrier": 28, "mars": 31, "avril": 30,
+                "mai": 31, "juin": 30, "juillet": 31, "aout": 31,
+                "septembre": 30, "octobre": 31, "novembre": 30, "decembre": 31
+            },
+            "profondeur_decharge": {
+                "Plomb": 50.0, "AGM": 70.0, "GEL": 80.0, "Lithium": 90.0
+            },
+            "facteurs_securite": {
+                "marge_onduleur": 1.2,
+                "facteur_autonomie_base": 1.0,
+                "ensoleillement_moyen_senegal": 5.0
+            },
+            "tarifs_senelec": {
+                "cout_electricite_kwh": 118.0
+            },
+            "seuils_senelec": {
+                "seuil_1": 150.0, "seuil_2": 250.0,
+                "tarif_1": 96.52, "tarif_2": 101.24, "tarif_3": 118.0
+            }
+        }
+
+# Fonction pour obtenir les prix actuels (Firebase ou secrets en fallback)
 @st.cache_data(ttl=3600)  # Cache pendant 1 heure
 def get_current_prices():
-    """Obtient les prix actuels depuis Firebase uniquement"""
+    """Obtient les prix actuels depuis Firebase, avec fallback sur les secrets"""
     firebase_prices = get_equipment_prices()
     if firebase_prices:
         return firebase_prices
     else:
-        # Retourne une structure vide si Firebase n'a pas de données
-        return {
-            "panneaux": {},
-            "batteries": {},
-            "onduleurs": {},
-            "regulateurs": {}
-        }
+        # Fallback sur les secrets si Firebase n'a pas de données
+        return get_equipment_prices_from_secrets()
 
 def clear_prices_cache():
     """Vide le cache des prix pour forcer le rechargement"""
     get_current_prices.clear()
+    get_equipment_prices_from_secrets.clear()
 
 # Configuration de la page
 st.set_page_config(
@@ -60,87 +134,8 @@ if 'choix' not in st.session_state:
         'voltage': 48
     }
 
-# Base de données complète des prix (en FCFA) - basée sur energiesolairesenegal.com
-PRIX_EQUIPEMENTS = {
-    "panneaux": {
-        "50W Polycristallin": {"prix": 45000, "puissance": 50, "type": "Polycristallin"},
-        "100W Polycristallin": {"prix": 75000, "puissance": 100, "type": "Polycristallin"},
-        "150W Polycristallin": {"prix": 95000, "puissance": 150, "type": "Polycristallin"},
-        "200W Polycristallin": {"prix": 115000, "puissance": 200, "type": "Polycristallin"},
-        "250W Polycristallin": {"prix": 140000, "puissance": 250, "type": "Polycristallin"},
-        "260W Polycristallin": {"prix": 145000, "puissance": 260, "type": "Polycristallin"},
-        "270W Polycristallin": {"prix": 150000, "puissance": 270, "type": "Polycristallin"},
-        "280W Polycristallin": {"prix": 155000, "puissance": 280, "type": "Polycristallin"},
-        "320W Polycristallin": {"prix": 180000, "puissance": 320, "type": "Polycristallin"},
-        "335W Polycristallin": {"prix": 195000, "puissance": 335, "type": "Polycristallin"},
-        
-        # Ajouts alignés sur energiesolairesenegal.com (prix promo)
-        "375W Monocristallin": {"prix": 49174, "puissance": 375, "type": "Monocristallin"},
-        "450W Monocristallin": {"prix": 56199, "puissance": 450, "type": "Monocristallin"},
-        "550W Monocristallin": {"prix": 65233, "puissance": 550, "type": "Monocristallin"},
-    },
-    "batteries": {
-        # Batteries Plomb-Acide (traditionnelles) — prix promo alignés
-        "Plomb 100Ah 12V": {"prix": 110395, "capacite": 100, "voltage": 12, "type": "Plomb", "cycles": 500, "decharge_max": 50},
-        "Plomb 150Ah 12V": {"prix": 160574, "capacite": 150, "voltage": 12, "type": "Plomb", "cycles": 500, "decharge_max": 50},
-        "Plomb 200Ah 12V": {"prix": 210759, "capacite": 200, "voltage": 12, "type": "Plomb", "cycles": 500, "decharge_max": 50},
-        
-        # Batteries AGM (Absorbed Glass Mat) — prix promo alignés
-        "AGM 100Ah 12V": {"prix": 110395, "capacite": 100, "voltage": 12, "type": "AGM", "cycles": 800, "decharge_max": 70},
-        "AGM 150Ah 12V": {"prix": 160574, "capacite": 150, "voltage": 12, "type": "AGM", "cycles": 800, "decharge_max": 70},
-        "AGM 200Ah 12V": {"prix": 210759, "capacite": 200, "voltage": 12, "type": "AGM", "cycles": 800, "decharge_max": 70},
-        "AGM 250Ah 12V": {"prix": 350000, "capacite": 250, "voltage": 12, "type": "AGM", "cycles": 800, "decharge_max": 70},
-        
-        # Batteries GEL — ajustement 200Ah
-        "GEL 100Ah 12V": {"prix": 180000, "capacite": 100, "voltage": 12, "type": "GEL", "cycles": 1200, "decharge_max": 80},
-        "GEL 150Ah 12V": {"prix": 270000, "capacite": 150, "voltage": 12, "type": "GEL", "cycles": 1200, "decharge_max": 80},
-        "GEL 200Ah 12V": {"prix": 210759, "capacite": 200, "voltage": 12, "type": "GEL", "cycles": 1200, "decharge_max": 80},
-        "GEL 250Ah 12V": {"prix": 450000, "capacite": 250, "voltage": 12, "type": "GEL", "cycles": 1200, "decharge_max": 80},
-        
-        # Batteries Lithium LiFePO4 — prix promo alignés
-        "Lithium 100Ah 12V": {"prix": 450000, "capacite": 100, "voltage": 12, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
-        "Lithium 150Ah 12V": {"prix": 650000, "capacite": 150, "voltage": 12, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
-        "Lithium 200Ah 12V": {"prix": 850000, "capacite": 200, "voltage": 12, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
-        "Lithium 150Ah 48V": {"prix": 1345883, "capacite": 150, "voltage": 48, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
-        "Lithium 200Ah 48V": {"prix": 1103959, "capacite": 200, "voltage": 48, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
-    },
-    "onduleurs": {
-        # Onduleurs Standard (Off-Grid)
-        "1000W 12V Pur Sinus": {"prix": 150000, "puissance": 1000, "voltage": 12, "type": "Off-Grid"},
-        "1500W 24V Pur Sinus": {"prix": 240000, "puissance": 1500, "voltage": 24, "type": "Off-Grid"},
-        "2000W 24V Pur Sinus": {"prix": 350000, "puissance": 2000, "voltage": 24, "type": "Off-Grid"},
-        
-        # Onduleurs Hybrides (avec MPPT intégré) — prix promo
-        "Hybride 1KVA 12V MPPT": {"prix": 151002, "puissance": 1000, "voltage": 12, "type": "Hybride", "mppt": "30A"},
-        "Hybride 3KVA 24V MPPT": {"prix": 400482, "puissance": 3000, "voltage": 24, "type": "Hybride", "mppt": "60A"},
-        "Hybride 3KVA 48V MPPT": {"prix": 538000, "puissance": 3000, "voltage": 48, "type": "Hybride", "mppt": "80A"},
-        "Hybride 5KVA 48V MPPT": {"prix": 750000, "puissance": 5000, "voltage": 48, "type": "Hybride", "mppt": "100A"},
-        
-        # Onduleurs Online (haute qualité) — prix promo
-        "Online 2KVA": {"prix": 263137, "puissance": 2000, "voltage": 24, "type": "Online"},
-        "Online 3KVA": {"prix": 558049, "puissance": 3000, "voltage": 48, "type": "Online"},
-        "Online 6KVA": {"prix": 1220487, "puissance": 6000, "voltage": 48, "type": "Online"},
-        "Online 10KVA Mono": {"prix": 1750962, "puissance": 10000, "voltage": 48, "type": "Online"},
-        "Online 10KVA 3/3 HF": {"prix": 3157902, "puissance": 10000, "voltage": 48, "type": "Online Tri"},
-        "Online 20KVA 3/3 HF": {"prix": 4565499, "puissance": 20000, "voltage": 48, "type": "Online Tri"},
-        "Online 30KVA 3/3 HF": {"prix": 5974410, "puissance": 30000, "voltage": 48, "type": "Online Tri"},
-    },
-    "regulateurs": {
-        # Régulateurs PWM
-        "PWM 10A 12/24V": {"prix": 15000, "amperage": 10, "type": "PWM", "voltage_max": 50},
-        "PWM 20A 12/24V": {"prix": 25000, "amperage": 20, "type": "PWM", "voltage_max": 50},
-        "PWM 30A 12/24V": {"prix": 35000, "amperage": 30, "type": "PWM", "voltage_max": 50},
-        "PWM 40A 12/24V": {"prix": 45000, "amperage": 40, "type": "PWM", "voltage_max": 50},
-        
-        # Régulateurs MPPT (30% plus efficaces)
-        "MPPT 20A 12/24V": {"prix": 45000, "amperage": 20, "type": "MPPT", "voltage_max": 100},
-        "MPPT 30A 12/24/48V": {"prix": 65000, "amperage": 30, "type": "MPPT", "voltage_max": 100},
-        "MPPT 40A 12/24/48V": {"prix": 85000, "amperage": 40, "type": "MPPT", "voltage_max": 150},
-        "MPPT 60A 12/24/48V": {"prix": 120000, "amperage": 60, "type": "MPPT", "voltage_max": 150},
-        "MPPT 80A 12/24/48V": {"prix": 160000, "amperage": 80, "type": "MPPT", "voltage_max": 150},
-        "MPPT 100A 12/24/48V": {"prix": 200000, "amperage": 100, "type": "MPPT", "voltage_max": 150},
-    }
-}
+# Base de données des prix chargée depuis les secrets (avec fallback Firebase)
+PRIX_EQUIPEMENTS = get_current_prices()
 
 
 
@@ -187,31 +182,17 @@ REGIONS_SENEGAL = [
 ]
 
 # Pourcentages de main d'œuvre par défaut par région (en % du coût total des équipements)
-POURCENTAGES_MAIN_OEUVRE_DEFAUT = {
-    "Dakar": 15.0,
-    "Thiès": 18.0,
-    "Saint-Louis": 20.0,
-    "Diourbel": 22.0,
-    "Louga": 25.0,
-    "Fatick": 25.0,
-    "Kaolack": 20.0,
-    "Kaffrine": 25.0,
-    "Tambacounda": 30.0,
-    "Kédougou": 35.0,
-    "Kolda": 30.0,
-    "Ziguinchor": 25.0,
-    "Sédhiou": 30.0,
-    "Matam": 30.0
-}
+POURCENTAGES_MAIN_OEUVRE_DEFAUT = get_labor_percentages_from_secrets()
 
 # Taux accessoires par défaut (en %)
-TAUX_ACCESSOIRES_DEFAUT = 15.0
+TAUX_ACCESSOIRES_DEFAUT = get_accessories_rate_from_secrets()
 
-# Estimation de surface des panneaux (approximation)
+# Estimation de surface des panneaux (approximation) - récupérées depuis les secrets
 # Hypothèse réaliste: ~5 m² par kWc installé (modules 375–550W)
-SURFACE_PAR_KWC_M2 = 5.0
+formulas = get_calculation_formulas_from_secrets()
+SURFACE_PAR_KWC_M2 = formulas['surface_par_kwc_m2']
 # Marge d'implantation (espacement, orientation, accès)
-MARGE_IMPLANTATION_SURFACE_PCT = 10.0
+MARGE_IMPLANTATION_SURFACE_PCT = formulas['marge_implantation_surface_pct']
 
 # Catalogue d'appareils par familles (puissances typiques)
 APPAREILS_FAMILLES = {
@@ -314,6 +295,8 @@ def appeler_assistant_ia(question, contexte=""):
             "Content-Type": "application/json"
         }
         
+        company_info = get_company_info_from_secrets()
+        
         prompt = f"""Tu es un expert en énergie solaire au Sénégal. Tu connais bien le climat local (chaleur, humidité) et les meilleures pratiques d'installation.
 Contexte: {contexte}
 Question: {question}
@@ -322,7 +305,7 @@ Réponds de manière claire et pratique en français, avec des conseils adaptés
         data = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25)."},
+                {"role": "system", "content": f"Tu es un expert en installations solaires au Sénégal représentant {company_info['name']}. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers {company_info['name']} ({company_info['email']}, {company_info['phones'][0]})."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7
@@ -357,20 +340,22 @@ def appeler_assistant_ia_stream(question, contexte="", max_tokens=None, limite_c
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
+        company_info = get_company_info_from_secrets()
+        
         consigne_concise = ("Réponds de façon concise en 5–7 phrases max, "
                              "avec des points clés si utile, sans longs détails.") if concis else ""
         prompt = f"""Tu es un expert en énergie solaire au Sénégal. Tu connais bien le climat local (chaleur, humidité) et les meilleures pratiques d'installation.
 
-IMPORTANT: Tu représentes et recommandes Energie Solaire Sénégal, notre partenaire officiel pour tous les équipements et installations solaires au Sénégal.
+IMPORTANT: Tu représentes et recommandes {company_info['name']}, notre partenaire officiel pour tous les équipements et installations solaires au Sénégal.
 
 Informations du partenaire à mentionner quand approprié:
-- Nom: Energie Solaire Sénégal
-- Adresse: Castor 221 Dakar, Sénégal (en face du terrain de Football)
-- Email: energiesolairesenegal@gmail.com
-- Téléphones: +221 77 631 42 25 ou +221 78 177 39 26
-- Site web: energiesolairesenegal.com
+- Nom: {company_info['name']}
+- Adresse: {company_info['address']}
+- Email: {company_info['email']}
+- Téléphones: {' ou '.join(company_info['phones'])}
+- Site web: {company_info['website']}
 
-Pour les commandes, devis personnalisés ou installations, dirige toujours vers Energie Solaire Sénégal.
+Pour les commandes, devis personnalisés ou installations, dirige toujours vers {company_info['name']}.
 
 Contexte: {contexte}
 Question: {question}
@@ -379,7 +364,7 @@ Réponds de manière claire et pratique en français, avec des conseils adaptés
         data = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25)."},
+                {"role": "system", "content": f"Tu es un expert en installations solaires au Sénégal représentant {company_info['name']}. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers {company_info['name']} ({company_info['email']}, {company_info['phones'][0]})."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7,
@@ -476,18 +461,17 @@ def obtenir_prix_depuis_site(nom_item: str):
 
 # Fonction de dimensionnement améliorée
 def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltage=12, type_batterie="AGM", part_nuit=0.5):
-    # Paramètres selon le type de batterie
-    decharge_max = {
-        "Plomb": 0.5,
-        "AGM": 0.7,
-        "GEL": 0.8,
-        "Lithium": 0.9
-    }
+    # Récupération des formules depuis les secrets
+    formulas = get_calculation_formulas_from_secrets()
     
-    # Calcul de la puissance panneau nécessaire (avec perte de 25%)
-    # 5h d'ensoleillement moyen au Sénégal
-    # Sortie en Watts-crête (Wc)
-    puissance_panneaux = ((consommation_journaliere * 1.25) / 5) * 1000
+    # Paramètres selon le type de batterie - récupérés depuis les secrets
+    decharge_max = formulas['battery_discharge_depths']
+    
+    # Calcul de la puissance panneau nécessaire - formules depuis les secrets
+    # Heures d'ensoleillement et facteur de sécurité depuis les secrets
+    heures_ensoleillement = formulas['heures_ensoleillement_senegal']
+    facteur_securite_panneaux = formulas['facteur_securite_panneaux']
+    puissance_panneaux = ((consommation_journaliere * facteur_securite_panneaux) / heures_ensoleillement) * 1000
     
     # Hypothèse réaliste: charge le jour, décharge la nuit
     # On dimensionne la batterie sur la fraction nocturne de la consommation
@@ -495,8 +479,9 @@ def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltag
     consommation_nocturne = consommation_journaliere * max(0.1, min(part_nuit, 1.0))
     capacite_batterie = (consommation_nocturne * autonomie_jours * 1000) / (voltage * profondeur_decharge)
     
-    # Puissance onduleur (pic de consommation estimé à 30% de la conso journalière)
-    puissance_onduleur = consommation_journaliere / 3 * 1000  # en W
+    # Puissance onduleur - facteur depuis les secrets
+    facteur_pic_consommation = formulas['facteur_pic_consommation']
+    puissance_onduleur = consommation_journaliere * facteur_pic_consommation * 1000  # en W
     
     return {
         "puissance_panneaux": puissance_panneaux,
@@ -599,19 +584,30 @@ def estimer_kwh_depuis_facture(montant_fcfa: float, type_compteur: str = "mensue
         return 0.0
     if m <= 0:
         return 0.0
+    
+    formulas = get_calculation_formulas_from_secrets()
+    
     # Paliers selon type de compteur
     if type_compteur.lower().startswith("bimes"):
-        p1_kwh, p2_kwh = 300.0, 200.0  # 2 mois
+        p1_kwh = formulas['senelec_seuil_p1_bimestriel']
+        p2_kwh = formulas['senelec_seuil_p2_bimestriel']
     else:
-        p1_kwh, p2_kwh = 150.0, 100.0  # 1 mois
-    cout_p1 = p1_kwh * 124.17
-    cout_p2 = p2_kwh * 136.49
+        p1_kwh = formulas['senelec_seuil_p1_mensuel']
+        p2_kwh = formulas['senelec_seuil_p2_mensuel']
+    
+    tarif_p1 = formulas['senelec_tarif_p1']
+    tarif_p2 = formulas['senelec_tarif_p2']
+    tarif_p3 = formulas['senelec_tarif_p3']
+    
+    cout_p1 = p1_kwh * tarif_p1
+    cout_p2 = p2_kwh * tarif_p2
+    
     if m <= cout_p1:
-        return m / 124.17
+        return m / tarif_p1
     elif m <= cout_p1 + cout_p2:
-        return p1_kwh + (m - cout_p1) / 136.49
+        return p1_kwh + (m - cout_p1) / tarif_p2
     else:
-        return p1_kwh + p2_kwh + (m - cout_p1 - cout_p2) / 159.36
+        return p1_kwh + p2_kwh + (m - cout_p1 - cout_p2) / tarif_p3
 
 # Fonction pour calculer le devis
 def calculer_devis(equipements, use_online=False, accessoires_rate=0.15, region_selectionnee=None):
@@ -792,7 +788,8 @@ with st.sidebar:
         with col2:
             st.image("logo-solaire.svg", width=350)
     except:
-        st.markdown("### ☀️ Energie Solaire Sénégal")
+        company_info = get_company_info_from_secrets()
+        st.markdown(f"### ☀️ {company_info['name']}")
     st.markdown("### ☀️ Conseiller solaire (chat rapide)")
     
     # Callback: déclenché à l'appui sur Entrée
@@ -822,7 +819,7 @@ with st.sidebar:
                     if pn_ctx and nb_ctx > 0:
                         p_unit_ctx = PRIX_EQUIPEMENTS['panneaux'][pn_ctx]['puissance']
                         p_tot_ctx = p_unit_ctx * nb_ctx
-                        prod_kwh_j_ctx = (p_tot_ctx / 1000.0) * 5.0 * 0.75
+                        prod_kwh_j_ctx = (p_tot_ctx / 1000.0) * formulas['heures_ensoleillement_senegal'] * formulas['pr_performance_ratio']
                 conso_totale_ctx = st.session_state.consommation if 'consommation' in st.session_state else 10.0
                 conso_couverte_ctx = st.session_state.get('consommation_couverte', None)
                 autonomie_voulue_ctx = choix.get('autonomie_h', None)
@@ -837,22 +834,23 @@ with st.sidebar:
             st.warning("⚠️ Veuillez entrer une question (minimum 6 caractères)")
     
     st.markdown("---")
-    st.markdown("### 🏢 Energie Solaire Sénégal")
-    st.markdown("""
- 
+    st.markdown(f"### 🏢 {company_info['name']}")
+    company_info = get_company_info_from_secrets()
     
+    st.markdown(f"""
+    
+
     🥇 **Premier outil de dimensionnement solaire en ligne au Sénégal**
-    
-    📍 **Adresse :** Castor 221 Dakar, Sénégal  
-    (En face du terrain de Football)
-    
-    📧 **Email :** energiesolairesenegal@gmail.com
-    
+
+    📍 **Adresse :** {company_info['address']}
+
+    📧 **Email :** {company_info['email']}
+
     📞 **Téléphones :**  
-    • +221 77 631 42 25  
-    • +221 78 177 39 26
-    
-    🌐 **Site web :** [energiesolairesenegal.com](https://energiesolairesenegal.com)
+    • {company_info['phones'][0]}  
+    • {company_info['phones'][1]}
+
+    🌐 **Site web :** [{company_info['website']}](https://{company_info['website']})
     """)
     
     st.markdown("---")
@@ -1271,13 +1269,11 @@ with tab1:
                         st.info(f"**{equip['onduleur']}**")
                 
                                 # 📅 Simulateur de production mensuelle (Sénégal)
+                formulas = get_calculation_formulas_from_secrets()
                 kWc = dim['puissance_panneaux'] / 1000.0
-                heures_par_jour = {
-                    'Jan': 6.2, 'Fév': 6.5, 'Mar': 6.7, 'Avr': 6.6, 'Mai': 6.5, 'Juin': 6.0,
-                    'Juil': 5.5, 'Août': 5.4, 'Sep': 5.8, 'Oct': 6.0, 'Nov': 6.2, 'Déc': 6.1
-                }
-                jours_mois = {'Jan':31,'Fév':28,'Mar':31,'Avr':30,'Mai':31,'Juin':30,'Juil':31,'Août':31,'Sep':30,'Oct':31,'Nov':30,'Déc':31}
-                PR = 0.80
+                heures_par_jour = formulas['heures_ensoleillement_mensuel_senegal']
+                jours_mois = formulas['jours_par_mois']
+                PR = formulas['pr_performance_ratio']
 
                 data = []
                 for m in heures_par_jour:
@@ -1490,8 +1486,8 @@ with tab2:
                     puissance_totale_w = puissance_unitaire * nb
                 else:
                     puissance_totale_w = 0
-                # 5h d'ensoleillement/jour avec pertes ~25%
-                prod_kwh_j = (puissance_totale_w / 1000.0) * 5.0 * 0.75
+                # Calcul de production avec formules depuis secrets
+                prod_kwh_j = (puissance_totale_w / 1000.0) * formulas['heures_ensoleillement_senegal'] * formulas['pr_performance_ratio']
                 conso_totale = st.session_state.consommation if 'consommation' in st.session_state else 10.0
                 autonomie_reelle_pct = min(100.0, (prod_kwh_j / conso_totale) * 100.0)
 
@@ -1531,7 +1527,7 @@ with tab2:
         st.markdown("### 💡 Analyse financière")
         
         # Calcul des économies basées sur la couverture réelle
-        cout_electricite_kwh = 100  # FCFA par kWh (Senelec)
+        cout_electricite_kwh = formulas['cout_electricite_kwh']  # FCFA par kWh (Senelec)
         conso_couverte_reelle = st.session_state.production_solaire_kwh_j if 'production_solaire_kwh_j' in st.session_state else (st.session_state.consommation_couverte if 'consommation_couverte' in st.session_state else st.session_state.consommation)
         conso_totale = st.session_state.consommation if 'consommation' in st.session_state else conso_couverte_reelle
         conso_couverte_reelle = min(conso_couverte_reelle, conso_totale)
@@ -1616,7 +1612,7 @@ Retour sur investissement      : {retour_investissement:.1f} ans
 
 {'═' * 64}
 Document généré automatiquement
-Pour plus d'informations : energiesolairesenegal.com
+Pour plus d'informations : {get_company_info_from_secrets()['website']}
 {'═' * 64}
 """
             
@@ -2021,7 +2017,7 @@ with tab3:
                     if current_prices_ctx and 'panneaux' in current_prices_ctx and pn_ctx in current_prices_ctx['panneaux']:
                         p_unit_ctx = current_prices_ctx['panneaux'][pn_ctx]['puissance']
                         p_tot_ctx = p_unit_ctx * nb_ctx
-                        prod_kwh_j_ctx = (p_tot_ctx / 1000.0) * 5.0 * 0.75
+                        prod_kwh_j_ctx = (p_tot_ctx / 1000.0) * formulas['heures_ensoleillement_senegal'] * formulas['pr_performance_ratio']
                         conso_totale_ctx = st.session_state.consommation if 'consommation' in st.session_state else 10.0
                         auto_reelle_ctx = min(100.0, (prod_kwh_j_ctx / conso_totale_ctx) * 100.0)
                     else:
@@ -2098,7 +2094,7 @@ L'utilisateur a dimensionné une installation avec:
                     punit = 0
                     if current_prices_opt and 'panneaux' in current_prices_opt and pn in current_prices_opt['panneaux']:
                         punit = current_prices_opt['panneaux'][pn].get('puissance', 0)
-                    prod_opt_kwh_j = (punit * nbp / 1000.0) * 5.0 * 0.75 if (pn and nbp > 0 and punit > 0) else 0.0
+                    prod_opt_kwh_j = (punit * nbp / 1000.0) * formulas['heures_ensoleillement_senegal'] * formulas['pr_performance_ratio'] if (pn and nbp > 0 and punit > 0) else 0.0
                     conso_tot = st.session_state.consommation if 'consommation' in st.session_state else 10.0
                     auto_opt_pct = min(100.0, (prod_opt_kwh_j / conso_tot) * 100.0) if conso_tot > 0 else 0.0
                     st.markdown(f"• Autonomie estimée: {auto_opt_pct:.0f}% ({prod_opt_kwh_j:.1f} kWh/j)")
@@ -2228,7 +2224,9 @@ with tab_contact:
         
         🥇 **Premier outil de dimensionnement solaire en ligne au Sénégal**
         
-        Cette application a été développée en **partenariat officiel** avec **Energie Solaire Sénégal**, 
+        company_info = get_company_info_from_secrets()
+        
+        Cette application a été développée en **partenariat officiel** avec **{company_info['name']}**, 
         leader dans la fourniture et l'installation d'équipements solaires au Sénégal.
         """)
         
@@ -2238,23 +2236,22 @@ with tab_contact:
         contact_col1, contact_col2 = st.columns(2)
         
         with contact_col1:
-            st.markdown("""
+            st.markdown(f"""
             **🏠 Adresse :**  
-            Castor 221 Dakar, Sénégal  
-            *(En face du terrain de Football)*
+            {company_info['address']}
             
             **📧 Email :**  
-            energiesolairesenegal@gmail.com
+            {company_info['email']}
             """)
         
         with contact_col2:
-            st.markdown("""
+            st.markdown(f"""
             **📞 Téléphones :**  
-            • +221 77 631 42 25  
-            • +221 78 177 39 26
+            • {company_info['phones'][0]}  
+            • {company_info['phones'][1]}
             
             **🌐 Site web :**  
-            [energiesolairesenegal.com](https://energiesolairesenegal.com)
+            [{company_info['website']}](https://{company_info['website']})
             """)
     
     with col2:
@@ -2303,15 +2300,17 @@ with tab_contact:
     # Section commande
     st.markdown("### 🛒 **Commander votre Installation**")
     
-    st.info("""
+    company_info = get_company_info_from_secrets()
+    
+    st.info(f"""
     **💡 Vous avez dimensionné votre installation ? Passez à l'action !**
-    
+
     Pour commander votre installation solaire ou obtenir un devis personnalisé :
-    
-    1. **📞 Appelez-nous** : +221 77 631 42 25 ou +221 78 177 39 26
-    2. **📧 Envoyez-nous un email** : energiesolairesenegal@gmail.com
-    3. **🌐 Visitez notre site** : [energiesolairesenegal.com](https://energiesolairesenegal.com)
-    4. **🏠 Rendez-vous sur place** : Castor 221 Dakar (en face du terrain de Football)
+
+    1. **📞 Appelez-nous** : {' ou '.join(company_info['phones'])}
+    2. **📧 Envoyez-nous un email** : {company_info['email']}
+    3. **🌐 Visitez notre site** : [{company_info['website']}](https://{company_info['website']})
+    4. **🏠 Rendez-vous sur place** : {company_info['address']}
     """)
     
     # Formulaire de contact rapide
@@ -2344,15 +2343,17 @@ with tab_contact:
         if submitted:
             if nom_contact and telephone_contact and message_contact:
                 # Ici on pourrait intégrer avec Firebase pour sauvegarder la demande
-                st.success("""
+                company_info = get_company_info_from_secrets()
+                
+                st.success(f"""
                 ✅ **Demande envoyée avec succès !**
-                
+
                 Nous vous contacterons dans les plus brefs délais.
-                
+
                 **En attendant, vous pouvez nous joindre directement :**
-                - 📞 +221 77 631 42 25
-                - 📞 +221 78 177 39 26
-                - 📧 energiesolairesenegal@gmail.com
+                - 📞 {company_info['phones'][0]}
+                - 📞 {company_info['phones'][1]}
+                - 📧 {company_info['email']}
                 """)
             else:
                 st.error("⚠️ Veuillez remplir au minimum : Nom, Téléphone et Message")
@@ -3441,12 +3442,14 @@ with col2:
         st.markdown("<h3 style='text-align: center;'>☀️</h3>", unsafe_allow_html=True)
 
 # Contenu textuel centré en dessous
-st.markdown("""
+company_info = get_company_info_from_secrets()
+
+st.markdown(f"""
 <div style='text-align: center; color: #666; padding: 10px 20px;'>
     <p><strong>☀️ Application de Dimensionnement Solaire - Sénégal</strong></p>
     <p style='color: #4CAF50; font-weight: bold; margin: 5px 0;'>🥇 Premier outil de dimensionnement solaire en ligne au Sénégal</p>
     <p>🌍 Développé par la Team Mo.TL (773591509).</p>
-    <p>📞 Pour acheter vos équipements : <a href='https://energiesolairesenegal.com' target='_blank'>energiesolairesenegal.com</a></p>
+    <p>📞 Pour acheter vos équipements : <a href='https://{company_info['website']}' target='_blank'>{company_info['website']}</a></p>
     <p style='font-size: 0.9em; margin-top: 10px;'>
         💡 <b>Conseil :</b> Consultez toujours un professionnel certifié pour l'installation<br>
         ⚡ Prix indicatifs - Demandez un devis personnalisé pour votre projet
