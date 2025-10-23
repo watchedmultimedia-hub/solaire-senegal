@@ -25,6 +25,10 @@ def get_current_prices():
     else:
         return PRIX_EQUIPEMENTS
 
+def clear_prices_cache():
+    """Vide le cache des prix pour forcer le rechargement"""
+    get_current_prices.clear()
+
 # Configuration de la page
 st.set_page_config(
     page_title="Dimensionnement Solaire Sénégal",
@@ -2144,6 +2148,8 @@ if is_user_authenticated() and is_admin_user():
                         # Sauvegarder dans Firebase
                         if save_equipment_prices(updated_prices):
                             st.success(f"✅ Prix de la catégorie '{selected_category}' sauvegardés avec succès!")
+                            # Vider le cache spécifique des prix
+                            clear_prices_cache()
                             st.cache_data.clear()
                             st.rerun()
                         else:
@@ -2165,6 +2171,8 @@ if is_user_authenticated() and is_admin_user():
                                     
                                     if save_equipment_prices(updated_prices):
                                         st.success(f"✅ Article '{nom_equipement}' supprimé avec succès!")
+                                        # Vider le cache spécifique des prix
+                                        clear_prices_cache()
                                         st.cache_data.clear()
                                         # Nettoyer le state
                                         del st.session_state[confirm_key]
