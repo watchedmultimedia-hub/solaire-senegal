@@ -5,6 +5,23 @@ import re
 from urllib.parse import quote
 import pandas as pd
 import math
+from firebase_config import (
+    login_user, logout_user, is_user_authenticated, is_admin_user,
+    save_quote_to_firebase, get_all_quotes, save_equipment_prices, get_equipment_prices,
+    save_client_request, get_all_client_requests, update_client_request_status, initialize_equipment_prices_in_firebase,
+    delete_quote, delete_client_request,
+    is_admin_email
+)
+
+# Fonction pour obtenir les prix actuels (Firebase ou par défaut)
+@st.cache_data(ttl=3600)  # Cache pendant 1 heure
+def get_current_prices():
+    """Obtient les prix actuels depuis Firebase ou utilise les prix par défaut"""
+    firebase_prices = get_equipment_prices()
+    if firebase_prices:
+        return firebase_prices
+    else:
+        return PRIX_EQUIPEMENTS
 
 # Configuration de la page
 st.set_page_config(
@@ -419,9 +436,12 @@ def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltag
 
 # Fonction pour sélectionner les équipements
 def selectionner_equipements(dimensionnement, choix_utilisateur):
+    # Obtenir les prix actuels (Firebase ou par défaut)
+    prix_equipements = get_current_prices()
+    
     type_batterie = choix_utilisateur["type_batterie"]
     type_onduleur = choix_utilisateur["type_onduleur"]
-    # Supporte l’absence de type_regulateur (ex: onduleur Hybride)
+    # Supporte l'absence de type_regulateur (ex: onduleur Hybride)
     type_regulateur = choix_utilisateur.get("type_regulateur", "MPPT")
     voltage_systeme = choix_utilisateur["voltage"]
     
@@ -431,7 +451,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     puissance_min = dimensionnement["puissance_panneaux"]
 
     candidats = []
-    for nom, specs in PRIX_EQUIPEMENTS["panneaux"].items():
+    for nom, specs in prix_equipements["panneaux"].items():
         p = specs["puissance"]
         if p <= 0:
             continue
@@ -449,7 +469,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     # Sélection batterie selon le type choisi
     batterie_select = None
     nb_batteries = 0
-    batteries_filtrees = {k: v for k, v in PRIX_EQUIPEMENTS["batteries"].items() 
+    batteries_filtrees = {k: v for k, v in prix_equipements["batteries"].items() 
                          if v["type"] == type_batterie and v["voltage"] == voltage_systeme}
     
     if batteries_filtrees:
@@ -468,7 +488,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     
     # Sélection onduleur selon le type choisi
     onduleur_select = None
-    onduleurs_filtres = {k: v for k, v in PRIX_EQUIPEMENTS["onduleurs"].items() 
+    onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
                         if type_onduleur in v["type"] and v["voltage"] == voltage_systeme}
     
     if onduleurs_filtres:
@@ -480,10 +500,10 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     # Sélection régulateur (seulement si onduleur pas hybride)
     regulateur_select = None
     if type_onduleur != "Hybride" and puissance_panneau_select and batterie_select:
-        puissance_panneaux_totale = nb_panneaux * PRIX_EQUIPEMENTS["panneaux"][puissance_panneau_select]["puissance"]
+        puissance_panneaux_totale = nb_panneaux * prix_equipements["panneaux"][puissance_panneau_select]["puissance"]
         amperage_requis = (puissance_panneaux_totale / voltage_systeme) * 1.25
         
-        regulateurs_filtres = {k: v for k, v in PRIX_EQUIPEMENTS["regulateurs"].items() 
+        regulateurs_filtres = {k: v for k, v in prix_equipements["regulateurs"].items() 
                               if v["type"] == type_regulateur}
         
         for nom, specs in sorted(regulateurs_filtres.items(), key=lambda x: x[1]["amperage"]):
@@ -523,13 +543,16 @@ def estimer_kwh_depuis_facture(montant_fcfa: float, type_compteur: str = "mensue
 
 # Fonction pour calculer le devis
 def calculer_devis(equipements, use_online=False, accessoires_rate=0.15):
+    # Obtenir les prix actuels (Firebase ou par défaut)
+    prix_equipements = get_current_prices()
+    
     total = 0
     details = []
     
     # Panneaux
     panneau_nom, nb_panneaux = equipements["panneau"]
     if panneau_nom:
-        prix_unitaire = PRIX_EQUIPEMENTS["panneaux"][panneau_nom]["prix"]
+        prix_unitaire = prix_equipements["panneaux"][panneau_nom]["prix"]
         source_prix = "local"
         url_source = None
         if use_online:
@@ -548,11 +571,25 @@ def calculer_devis(equipements, use_online=False, accessoires_rate=0.15):
             "source_prix": source_prix,
             "url_source": url_source
         })
+        
+        # Supports de panneaux (forfait par panneau)
+        if panneau_nom and nb_panneaux > 0:
+            prix_support = 25000
+            sous_total_supports = prix_support * nb_panneaux
+            total += sous_total_supports
+            details.append({
+                "item": "Supports de panneaux",
+                "quantite": nb_panneaux,
+                "prix_unitaire": prix_support,
+                "sous_total": sous_total_supports,
+                "source_prix": "forfait 25 000/panneau",
+                "url_source": None
+            })
     
     # Batteries
     batterie_nom, nb_batteries = equipements["batterie"]
     if batterie_nom:
-        prix_unitaire = PRIX_EQUIPEMENTS["batteries"][batterie_nom]["prix"]
+        prix_unitaire = prix_equipements["batteries"][batterie_nom]["prix"]
         source_prix = "local"
         url_source = None
         if use_online:
@@ -575,7 +612,7 @@ def calculer_devis(equipements, use_online=False, accessoires_rate=0.15):
     # Onduleur
     onduleur_nom = equipements["onduleur"]
     if onduleur_nom:
-        prix_unitaire = PRIX_EQUIPEMENTS["onduleurs"][onduleur_nom]["prix"]
+        prix_unitaire = prix_equipements["onduleurs"][onduleur_nom]["prix"]
         source_prix = "local"
         url_source = None
         if use_online:
@@ -597,7 +634,7 @@ def calculer_devis(equipements, use_online=False, accessoires_rate=0.15):
     # Régulateur (si nécessaire)
     regulateur_nom = equipements["regulateur"]
     if regulateur_nom:
-        prix_unitaire = PRIX_EQUIPEMENTS["regulateurs"][regulateur_nom]["prix"]
+        prix_unitaire = prix_equipements["regulateurs"][regulateur_nom]["prix"]
         source_prix = "local"
         url_source = None
         if use_online:
@@ -616,11 +653,11 @@ def calculer_devis(equipements, use_online=False, accessoires_rate=0.15):
             "url_source": url_source
         })
     
-    # Accessoires (câbles, connecteurs, protections, structure)
+    # Accessoires (câbles, connecteurs, protections)
     accessoires = int(total * accessoires_rate)
     total += accessoires
     details.append({
-        "item": "Accessoires (câbles, connecteurs, protections, structure)",
+        "item": "Accessoires (câbles, connecteurs, protections)",
         "quantite": 1,
         "prix_unitaire": accessoires,
         "sous_total": accessoires,
@@ -631,7 +668,7 @@ def calculer_devis(equipements, use_online=False, accessoires_rate=0.15):
     # Installation
     puissance_totale = 0
     if panneau_nom:
-        puissance_totale = nb_panneaux * PRIX_EQUIPEMENTS["panneaux"][panneau_nom]["puissance"] / 1000
+        puissance_totale = nb_panneaux * prix_equipements["panneaux"][panneau_nom]["puissance"] / 1000
     
     # Installation (forfait fixe demandé)
     installation = 200000
@@ -706,8 +743,49 @@ with st.sidebar:
     st.markdown("### À propos")
     st.info("Application complète de dimensionnement solaire avec tous les types d'équipements disponibles sur le marché sénégalais.")
 
-# Onglets principaux
-tab1, tab2, tab3 = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire"])
+# Interface d'authentification admin dans la sidebar
+with st.sidebar:
+    st.markdown("---")
+    
+    if not is_user_authenticated():
+        with st.expander("🔐 Connexion Admin", expanded=False):
+            # Connexion
+            st.subheader("🔐 Connexion")
+            with st.form("admin_login"):
+                email = st.text_input("Email", placeholder="admin@energiesolairesenegal.com")
+                password = st.text_input("Mot de passe", type="password")
+                login_btn = st.form_submit_button("Se connecter")
+                
+                if login_btn and email and password:
+                    with st.spinner("Connexion en cours..."):
+                        user = login_user(email, password)
+                        if user:
+                            st.session_state['user_token'] = user['idToken']
+                            st.session_state['user_email'] = email
+                            st.session_state['is_admin'] = is_admin_email(email)
+                            st.success("✅ Connexion réussie!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Échec de la connexion. Vérifiez vos identifiants.")
+            
+
+    else:
+        if is_admin_user():
+            st.success(f"👋 **Admin connecté**")
+        else:
+            st.info(f"👋 **Utilisateur connecté**")
+        st.write(f"📧 {st.session_state.get('user_email', '')}")
+        if st.button("🚪 Se déconnecter", use_container_width=True):
+            logout_user()
+            st.rerun()
+
+# (Supprimé) Mode développement et Debug Info retirés selon demande
+
+# Onglets principaux avec admin si connecté
+if is_user_authenticated() and is_admin_user():
+    tab1, tab2, tab3, tab_admin = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire", "⚙️ Admin"])
+else:
+    tab1, tab2, tab3 = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire"])
 
 with tab1:
     st.header("Calculez vos besoins en énergie solaire")
@@ -1131,12 +1209,8 @@ with tab2:
         st.warning("⚠️ Veuillez d'abord effectuer un dimensionnement dans l'onglet 'Dimensionnement'")
     else:
         st.markdown("### ⚙️ Options du devis")
-        use_online = st.checkbox(
-            "Utiliser les prix en ligne (energiesolairesenegal.com)",
-            help="Recherche automatique des prix par référence sur energiesolairesenegal.com"
-        )
-        accessoires_pct = st.slider("Taux accessoires (%)", 5, 20, 15, step=1, help="Inclut câbles, connecteurs, protections, structure, etc.", key="accessoires_pct_devis")
-        devis = calculer_devis(st.session_state.equipements, use_online=use_online, accessoires_rate=accessoires_pct/100.0)
+        accessoires_pct = st.slider("Taux accessoires (%)", 5, 20, 15, step=1, help="Inclut câbles, connecteurs, protections, etc. (hors supports)", key="accessoires_pct_devis")
+        devis = calculer_devis(st.session_state.equipements, use_online=False, accessoires_rate=accessoires_pct/100.0)
         
         # Résumé du système
         st.markdown("### 📋 Résumé de votre installation")
@@ -1241,37 +1315,7 @@ with tab2:
             st.metric("Économie estimée", f"{economie_mensuelle:,.0f} FCFA/mois")
         st.caption(f"Couverture réelle estimée: {autonomie_reelle_pct:.0f}%")
         
-        # Informations de paiement
-        st.markdown("---")
-        st.markdown("### 💳 Options de paiement")
-        col_pay1, col_pay2, col_pay3 = st.columns(3)
-        
-        with col_pay1:
-            st.info(f"**Comptant**\n\n{devis['total']:,} FCFA")
-        
-        with col_pay2:
-            mensualite_12 = devis['total'] / 12 * 1.1  # +10% d'intérêt
-            st.info(f"**12 mois**\n\n{mensualite_12:,.0f} FCFA/mois")
-        
-        with col_pay3:
-            mensualite_24 = devis['total'] / 24 * 1.15  # +15% d'intérêt
-            st.info(f"**24 mois**\n\n{mensualite_24:,.0f} FCFA/mois")
-        
-        # Notes importantes
-        st.markdown("---")
-        st.markdown("### 📝 Notes importantes")
-        st.warning("""
-        **Ce devis est une estimation basée sur :**
-        - Les prix moyens du marché sénégalais
-        - Les équipements disponibles chez les fournisseurs locaux
-        - Une installation standard
-        
-        **Le prix final peut varier selon :**
-        - La complexité de l'installation
-        - L'accessibilité du site
-        - Les promotions en cours
-        - Le fournisseur choisi
-        """)
+        # (Section paiement supprimée; notes importantes déplacées en bas)
         
         # Économies sur 10 ans
         st.markdown("---")
@@ -1340,11 +1384,6 @@ Type onduleur           : {st.session_state.choix['type_onduleur']}
 💰 TOTAL ESTIMATIF : {devis['total']:,} FCFA
 {'═' * 64}
 
-💳 OPTIONS DE PAIEMENT
-{'─' * 64}
-Comptant    : {devis['total']:,} FCFA
-12 mois     : {mensualite_12:,.0f} FCFA/mois (+10%)
-24 mois     : {mensualite_24:,.0f} FCFA/mois (+15%)
 
 💡 ANALYSE FINANCIÈRE
 {'─' * 64}
@@ -1400,7 +1439,215 @@ Pour plus d'informations : energiesolairesenegal.com
                 mime="application/vnd.ms-excel",
                 use_container_width=True
             )
+        
+        # Partage de devis avec coordonnées (formulaire détaillé)
+        st.markdown("---")
+        st.markdown("### 📤 Partager mon devis au service technique")
+        
+        with st.expander("📋 Partager mon devis au service technique", expanded=False):
+            st.info("✉️ Remplissez ce formulaire pour partager votre devis au service technique. Ces informations facilitent un suivi rapide.")
+            
+            with st.form("form_partage_devis"):
+                col_contact1_dev, col_contact2_dev = st.columns(2)
+                
+                with col_contact1_dev:
+                    nom_dev = st.text_input("👤 Nom complet *", placeholder="Ex: Amadou Diallo")
+                    tel_dev = st.text_input("📱 Téléphone *", placeholder="Ex: +221 77 123 45 67")
+                    email_dev = st.text_input("📧 Email *", placeholder="Ex: amadou@example.com")
+                
+                with col_contact2_dev:
+                    ville_dev = st.text_input("🏙️ Ville *", placeholder="Ex: Dakar")
+                    quartier_dev = st.text_input("📍 Quartier/Zone", placeholder="Ex: Plateau, Almadies...")
+                    type_batiment_dev = st.selectbox("🏠 Type de bâtiment", 
+                                                   ["Maison individuelle", "Appartement", "Commerce", "Bureau", "Industrie", "Autre"])
+                
+                # Informations sur le projet
+                st.markdown("#### 🔧 Détails du projet")
+                col_projet1_dev, col_projet2_dev = st.columns(2)
+                
+                with col_projet1_dev:
+                    urgence_dev = st.selectbox("⏰ Urgence du projet", 
+                                             ["Pas urgent (> 6 mois)", "Moyen terme (3-6 mois)", "Court terme (1-3 mois)", "Urgent (< 1 mois)"])
+                    budget_estime_dev = st.selectbox("💰 Budget estimé", 
+                                                   ["< 500 000 FCFA", "500 000 - 1 000 000 FCFA", "1 000 000 - 2 000 000 FCFA", 
+                                                    "2 000 000 - 5 000 000 FCFA", "> 5 000 000 FCFA", "À définir"])
+                
+                with col_projet2_dev:
+                    installation_existante_dev = st.radio("⚡ Installation électrique existante", 
+                                                     ["Raccordé au réseau SENELEC", "Groupe électrogène", "Aucune installation", "Autre"])
+                    visite_technique_dev = st.checkbox("🔍 Demander une visite technique sur site")
+                
+                # Zone de commentaires
+                commentaires_dev = st.text_area("💬 Questions ou commentaires spécifiques", 
+                                              placeholder="Décrivez vos besoins spécifiques, contraintes, questions...", 
+                                              height=100)
+                
+                # Consentement
+                consent_dev = st.checkbox("✅ J'accepte d'être contacté par l'équipe technique d'Energie Solaire Sénégal *")
+                
+                # Bouton de soumission
+                if st.form_submit_button("📤 Envoyer mon devis", type="primary", use_container_width=True):
+                    # Validation des champs obligatoires
+                    if not nom_dev or not tel_dev or not ville_dev or not email_dev or not consent_dev:
+                        st.error("❌ Veuillez remplir les champs obligatoires (*) dont l’email, et accepter d'être contacté.")
+                    elif '@' not in email_dev or '.' not in email_dev.split('@')[-1]:
+                        st.error("❌ Email invalide.")
+                    else:
+                        quote_data = {
+                            'timestamp': pd.Timestamp.now().isoformat(),
+                            'consommation_kwh_jour': st.session_state.consommation,
+                            'voltage_systeme': st.session_state.choix['voltage'],
+                            'type_batterie': st.session_state.choix['type_batterie'],
+                            'type_onduleur': st.session_state.choix['type_onduleur'],
+                            'puissance_totale_kwc': devis['puissance_totale'],
+                            'autonomie_souhaitee_pct': st.session_state.get('autonomie_pct', 100),
+                            'autonomie_reelle_pct': st.session_state.get('autonomie_reelle_pct', 100),
+                            'prix_total_fcfa': devis['total'],
+                            'details_equipements': devis['details'],
+                            'economie_mensuelle_fcfa': economie_mensuelle,
+                            'retour_investissement_ans': retour_investissement,
+                            'contact_info': {
+                                'name': nom_dev.strip(),
+                                'phone': tel_dev.strip(),
+                                'email': email_dev.strip(),
+                                'ville': ville_dev.strip(),
+                                'quartier': quartier_dev.strip(),
+                                'type_batiment': type_batiment_dev,
+                                'urgence': urgence_dev,
+                                'budget_estime': budget_estime_dev,
+                                'installation_existante': installation_existante_dev,
+                                'visite_technique': bool(visite_technique_dev),
+                                'commentaires': commentaires_dev.strip(),
+                                'demande_contact': bool(consent_dev),
+                                'source': 'Application Dimensionnement Solaire - Devis Client'
+                            }
+                        }
+                        quote_id = save_quote_to_firebase(quote_data)
+                        if quote_id:
+                            st.success(f"✅ Devis envoyé au service technique ! Référence: {quote_id[:8]}")
+                            st.balloons()
+                        else:
+                            st.error("❌ Erreur lors du partage")
+        
+        # Formulaire de soumission au support technique
+        st.markdown("---")
+        st.markdown("### 📞 Demander un contact du support technique")
+        
+        with st.expander("📋 Soumettre une demande de contact", expanded=False):
+            st.info("💼 Remplissez ce formulaire pour être contacté par notre équipe technique. Nous vous proposerons un devis personnalisé et répondrons à toutes vos questions.")
+            
+            with st.form("client_contact_form"):
+                col_contact1, col_contact2 = st.columns(2)
+                
+                with col_contact1:
+                    nom_client = st.text_input("👤 Nom complet *", placeholder="Ex: Amadou Diallo")
+                    telephone = st.text_input("📱 Téléphone *", placeholder="Ex: +221 77 123 45 67")
+                    email_client = st.text_input("📧 Email", placeholder="Ex: amadou@example.com")
+                
+                with col_contact2:
+                    ville = st.text_input("🏙️ Ville *", placeholder="Ex: Dakar")
+                    quartier = st.text_input("📍 Quartier/Zone", placeholder="Ex: Plateau, Almadies...")
+                    type_batiment = st.selectbox("🏠 Type de bâtiment", 
+                                               ["Maison individuelle", "Appartement", "Commerce", "Bureau", "Industrie", "Autre"])
+                
+                # Informations sur le projet
+                st.markdown("#### 🔧 Détails du projet")
+                col_projet1, col_projet2 = st.columns(2)
+                
+                with col_projet1:
+                    urgence = st.selectbox("⏰ Urgence du projet", 
+                                         ["Pas urgent (> 6 mois)", "Moyen terme (3-6 mois)", "Court terme (1-3 mois)", "Urgent (< 1 mois)"])
+                    budget_estime = st.selectbox("💰 Budget estimé", 
+                                               ["< 500 000 FCFA", "500 000 - 1 000 000 FCFA", "1 000 000 - 2 000 000 FCFA", 
+                                                "2 000 000 - 5 000 000 FCFA", "> 5 000 000 FCFA", "À définir"])
+                
+                with col_projet2:
+                    installation_existante = st.radio("⚡ Installation électrique existante", 
+                                                     ["Raccordé au réseau SENELEC", "Groupe électrogène", "Aucune installation", "Autre"])
+                    visite_technique = st.checkbox("🔍 Demander une visite technique sur site")
+                
+                # Zone de commentaires
+                commentaires = st.text_area("💬 Questions ou commentaires spécifiques", 
+                                          placeholder="Décrivez vos besoins spécifiques, contraintes, questions...", 
+                                          height=100)
+                
+                # Consentement
+                consentement = st.checkbox("✅ J'accepte d'être contacté par l'équipe technique d'Energie Solaire Sénégal *")
+                
+                # Bouton de soumission
+                if st.form_submit_button("📤 Soumettre ma demande", type="primary", use_container_width=True):
+                    # Validation des champs obligatoires
+                    if not nom_client or not telephone or not ville or not consentement:
+                        st.error("❌ Veuillez remplir tous les champs obligatoires (*) et accepter d'être contacté.")
+                    else:
+                        # Préparer les données de la demande
+                        request_data = {
+                            # Informations client
+                            'nom_client': nom_client,
+                            'telephone': telephone,
+                            'email_client': email_client,
+                            'ville': ville,
+                            'quartier': quartier,
+                            'type_batiment': type_batiment,
+                            
+                            # Détails du projet
+                            'urgence': urgence,
+                            'budget_estime': budget_estime,
+                            'installation_existante': installation_existante,
+                            'visite_technique': visite_technique,
+                            'commentaires': commentaires,
+                            
+                            # Données techniques du dimensionnement
+                            'dimensionnement': {
+                                'consommation_kwh_jour': st.session_state.consommation,
+                                'voltage_systeme': st.session_state.choix['voltage'],
+                                'type_batterie': st.session_state.choix['type_batterie'],
+                                'type_onduleur': st.session_state.choix['type_onduleur'],
+                                'puissance_totale_kwc': devis['puissance_totale'],
+                                'autonomie_souhaitee_pct': st.session_state.get('autonomie_pct', 100),
+                                'autonomie_reelle_pct': st.session_state.get('autonomie_reelle_pct', 100),
+                                'prix_total_fcfa': devis['total'],
+                                'details_equipements': devis['details'],
+                                'economie_mensuelle_fcfa': economie_mensuelle,
+                                'retour_investissement_ans': retour_investissement
+                            },
+                            
+                            # Métadonnées
+                            'source': 'Application Dimensionnement Solaire',
+                            'type_demande': 'contact_technique'
+                        }
+                        
+                        # Sauvegarder la demande dans Firebase
+                        request_id = save_client_request(request_data)
+                        if request_id:
+                            st.success("✅ **Demande envoyée avec succès !** Votre demande a été transmise à notre équipe technique. Vous serez contacté dans les plus brefs délais.")
+                            st.balloons()
+                            
+                            # Afficher un résumé de la demande
+                            with st.expander("📋 Résumé de votre demande", expanded=True):
+                                st.write(f"**Référence:** {request_id[:8]}")
+                                st.write(f"**Nom:** {nom_client}")
+                                st.write(f"**Téléphone:** {telephone}")
+                                st.write(f"**Ville:** {ville}")
+                                st.write(f"**Projet:** {type_batiment} - {urgence}")
+                                st.write(f"**Budget estimé:** {budget_estime}")
+                                st.write(f"**Installation dimensionnée:** {devis['puissance_totale']:.2f} kWc - {devis['total']:,} FCFA")
+                        else:
+                            st.error("❌ Erreur lors de l'envoi de la demande. Veuillez réessayer ou contacter directement energiesolairesenegal.com")
+        
+        # (Ancienne section Partager mon devis remplacée par un formulaire détaillé au-dessus)
+        
+    # Notes importantes (placées en bas)
+    st.markdown("---")
+    st.markdown("### 📝 Notes importantes")
+    st.warning("""
 
+    **Le prix final peut varier selon :**
+    - La complexité de l'installation
+    - L'accessibilité du site
+    - Les promotions en cours
+    """)
+        
 with tab3:
     st.header("☀️ Conseiller solaire")
     
@@ -1443,8 +1690,7 @@ L'utilisateur a dimensionné une installation avec:
 """
         
         st.subheader("🎛️ Options d’équipements avec totaux")
-        options_use_online = st.checkbox("Utiliser les prix en ligne (energiesolairesenegal.com)", value=True)
-        options_accessoires_pct = st.slider("Taux accessoires (%)", 5, 20, 15, step=1, help="Inclut câbles, connecteurs, protections, structure, etc.", key="accessoires_pct_options")
+        options_accessoires_pct = st.slider("Taux accessoires (%)", 5, 20, 15, step=1, help="Inclut câbles, connecteurs, protections, etc. (hors supports)", key="accessoires_pct_options")
         base_voltage = st.session_state.choix['voltage'] if 'choix' in st.session_state else 48
 
         options_spec = [
@@ -1471,7 +1717,7 @@ L'utilisateur a dimensionné une installation avec:
                 choix_opt['type_regulateur'] = opt['type_regulateur']
 
             equip_opt = selectionner_equipements(dim_opt, choix_opt)
-            devis_opt = calculer_devis(equip_opt, use_online=options_use_online, accessoires_rate=options_accessoires_pct/100.0)
+            devis_opt = calculer_devis(equip_opt, use_online=False, accessoires_rate=options_accessoires_pct/100.0)
             with st.expander(f"{opt['nom']} – Total: {devis_opt['total']:,} FCFA", expanded=False):
                 st.markdown(f"• Batterie: {opt['type_batterie']}")
                 st.markdown(f"• Onduleur: {opt['type_onduleur']}")
@@ -1504,7 +1750,6 @@ L'utilisateur a dimensionné une installation avec:
                     st.session_state.option_choisie = opt['nom']
                     st.session_state.equip_choisi = equip_opt
                     st.session_state.devis_choisi = devis_opt
-                    st.session_state.use_online_options = options_use_online
                     st.success("Option appliquée. Allez à l’onglet Devis pour exporter.")
 
         st.markdown("---")
@@ -1601,819 +1846,484 @@ L'utilisateur a dimensionné une installation avec:
             else:
                 st.warning("⚠️ Veuillez entrer une question (minimum 5 caractères)")
 
-if False:  # Guide désactivé
-    st.header("📖 Guide Complet - Énergie Solaire au Sénégal")
-    
-    guide_section = st.selectbox(
-        "Choisissez une section du guide",
-        [
-            "🌍 Pourquoi le solaire au Sénégal ?",
-            "🔋 Types de batteries expliqués",
-            "⚡ Types d'onduleurs",
-            "🎛️ Régulateurs PWM vs MPPT",
-            "🔧 Installation et mise en service",
-            "🛠️ Maintenance et entretien",
-            "⚠️ Problèmes courants et solutions",
-            "💵 Prix indicatifs des équipements",
-            "💡 Conseils d'optimisation"
-        ]
-    )
-    
-    if guide_section == "🌍 Pourquoi le solaire au Sénégal ?":
-        st.markdown("""
-        ### Avantages de l'énergie solaire au Sénégal
+# Onglet Admin (seulement si connecté en tant qu'admin)
+if is_user_authenticated() and is_admin_user():
+    with tab_admin:
+        st.header("⚙️ Panneau d'Administration")
         
-        #### ☀️ Ensoleillement exceptionnel
-        - **5 à 6 heures** d'ensoleillement optimal par jour
-        - **300+ jours** de soleil par an
-        - Position géographique idéale proche de l'équateur
+        # Sous-onglets admin
+        admin_tab1, admin_tab2, admin_tab3 = st.tabs(["💰 Gestion des Prix", "📋 Devis Clients", "📞 Demandes Clients"])
         
-        #### 💰 Économies substantielles
-        - Facture Senelec réduite de **70 à 100%**
-        - Prix du kWh Senelec : ~100 FCFA
-        - Retour sur investissement : **3 à 7 ans**
-        
-        #### 🔌 Indépendance énergétique
-        - Protection contre les délestages
-        - Autonomie totale possible
-        - Électricité stable et continue
-        
-        #### 🌱 Impact environnemental
-        - Énergie propre et renouvelable
-        - Réduction de l'empreinte carbone
-        - Contribue au développement durable
-        """)
-    
-    elif guide_section == "🔋 Types de batteries expliqués":
-        st.markdown("""
-        ### Comparaison détaillée des batteries
-        """)
-        
-        for type_bat, info in INFO_BATTERIES.items():
-            with st.expander(f"**{type_bat}** - Cliquez pour détails"):
-                col_av, col_inc = st.columns(2)
-                
-                with col_av:
-                    st.markdown("**✅ Avantages**")
-                    st.markdown(info["avantages"])
-                
-                with col_inc:
-                    st.markdown("**❌ Inconvénients**")
-                    st.markdown(info["inconvenients"])
-                
-                st.info(f"💡 **Recommandé pour:** {info['usage']}")
-                
-                # Caractéristiques techniques
-                st.markdown("**📊 Caractéristiques**")
-                if type_bat == "Plomb":
-                    st.markdown("""
-                    - Cycles de vie: **500-800 cycles**
-                    - Profondeur de décharge: **50%**
-                    - Durée de vie: **2-3 ans**
-                    - Entretien: **Mensuel (eau distillée)**
-                    - Prix: **Le moins cher**
-                    """)
-                elif type_bat == "AGM":
-                    st.markdown("""
-                    - Cycles de vie: **800-1000 cycles**
-                    - Profondeur de décharge: **70%**
-                    - Durée de vie: **4-5 ans**
-                    - Entretien: **Aucun**
-                    - Prix: **Moyen** (+25% vs Plomb)
-                    """)
-                elif type_bat == "GEL":
-                    st.markdown("""
-                    - Cycles de vie: **1200-1500 cycles**
-                    - Profondeur de décharge: **80%**
-                    - Durée de vie: **5-7 ans**
-                    - Entretien: **Aucun**
-                    - Prix: **Élevé** (+50% vs Plomb)
-                    """)
-                else:  # Lithium
-                    st.markdown("""
-                    - Cycles de vie: **3000-5000 cycles**
-                    - Profondeur de décharge: **90%**
-                    - Durée de vie: **10-12 ans**
-                    - Entretien: **Aucun**
-                    - Prix: **Très élevé** (+300% vs Plomb)
-                    - **MEILLEUR investissement long terme !**
-                    """)
-        
-        st.markdown("---")
-        st.markdown("### 🎯 Quelle batterie choisir ?")
-        
-        col_usage1, col_usage2 = st.columns(2)
-        
-        with col_usage1:
-            st.info("""
-            **Budget limité / Usage occasionnel**
-            ➡️ **AGM** (meilleur rapport qualité/prix)
+        with admin_tab1:
+            st.subheader("💰 Gestion des Prix des Équipements")
             
-            **Usage domestique régulier**
-            ➡️ **AGM ou GEL**
-            """)
-        
-        with col_usage2:
-            st.success("""
-            **Installation professionnelle**
-            ➡️ **GEL ou Lithium**
+            # Bouton pour vider le cache des données et recharger les prix
+            col_refresh, col_info = st.columns([1, 3])
+            with col_refresh:
+                if st.button("🔄 Recharger les prix (vider le cache)"):
+                    st.cache_data.clear()
+                    st.success("Cache vidé. Les prix seront rechargés.")
+                    st.rerun()
+            with col_info:
+                st.caption("Utilisez ce bouton si le chargement des prix semble lent ou s'il affiche des valeurs obsolètes.")
             
-            **Investissement long terme**
-            ➡️ **Lithium** (rentable sur 10 ans)
-            """)
-    
-    elif guide_section == "⚡ Types d'onduleurs":
-        st.markdown("""
-        ### Types d'onduleurs
-        
-        - Off-Grid: convertit le DC des batteries en AC
-        - Hybride: intègre régulateur MPPT, bascule réseau/batteries
-        - Online: double conversion, protection maximale
-        """)
-    
-    elif guide_section == "🎛️ Régulateurs PWM vs MPPT":
-        st.markdown("""
-        ### PWM vs MPPT : Comprendre la différence
-        
-        #### 🔵 Régulateur PWM (Pulse Width Modulation)
-        
-        **Comment ça marche ?**
-        - Technologie simple : connecte directement les panneaux aux batteries
-        - Comme un interrupteur qui s'allume/s'éteint rapidement
-        
-        **✅ Avantages:**
-        - Prix accessible (15,000 - 45,000 FCFA)
-        - Simple et fiable
-        - Adapté aux petites installations
-        
-        **❌ Inconvénients:**
-        - Perte de 20-30% d'énergie
-        - Panneaux et batteries doivent avoir même voltage
-        - Moins efficace par temps chaud
-        
-        **🎯 Recommandé pour:**
-        - Petites installations (< 500W)
-        - Budget très limité
-        - Systèmes simples 12V
-        
-        ---
-        
-        #### 🟢 Régulateur MPPT (Maximum Power Point Tracking)
-        
-        **Comment ça marche ?**
-        - Technologie intelligente : trouve le point optimal de production
-        - Convertit l'excès de voltage en ampérage
-        - S'adapte aux conditions en temps réel
-        
-        **✅ Avantages:**
-        - **30% plus efficace** que PWM
-        - Fonctionne mieux par temps chaud
-        - Peut connecter panneaux haute tension
-        - Production maximale même par temps nuageux
-        - Charge plus rapide
-        
-        **❌ Inconvénients:**
-        - Prix plus élevé (45,000 - 200,000 FCFA)
-        - Configuration plus complexe
-        
-        **🎯 Recommandé pour:**
-        - Toute installation > 500W
-        - Climat chaud du Sénégal
-        - Installations sérieuses
-        - Rentable dès 1000W
-        
-        ---
-        
-        ### 📊 Comparaison directe
-        """)
-        
-        col_comp1, col_comp2 = st.columns(2)
-        
-        with col_comp1:
-            st.info("""
-            **PWM**
+            # Charger les prix actuels depuis Firebase
+            current_prices = get_equipment_prices()
+            if current_prices:
+                st.success("✅ Prix chargés depuis Firebase")
+            else:
+                st.info("ℹ️ Aucun prix personnalisé trouvé. Utilisation des prix par défaut.")
+                current_prices = PRIX_EQUIPEMENTS
             
-            💰 Prix: 15,000 - 45,000 FCFA
-            ⚡ Efficacité: 70-75%
-            🌡️ Chaleur: Performance réduite
-            📉 Perte: 20-30%
-            🔧 Installation: Simple
-            """)
-        
-        with col_comp2:
-            st.success("""
-            **MPPT ⭐**
+            # Interface de modification des prix
+            st.markdown("### 🔧 Modifier les prix")
             
-            💰 Prix: 45,000 - 200,000 FCFA
-            ⚡ Efficacité: 94-98%
-            🌡️ Chaleur: Performance maintenue
-            📈 Gain: +30%
-            🔧 Installation: Moyenne
-            """)
-        
-        st.warning("""
-        ### 🎯 Conseil pour le Sénégal
-        
-        Le **MPPT est fortement recommandé** car :
-        1. La chaleur réduit l'efficacité des panneaux → MPPT compense
-        2. Gain de 30% = plus de panneaux économisés
-        3. Rentabilisé en 2-3 ans sur la production
-        4. Les onduleurs hybrides ont déjà du MPPT intégré !
-        """)
-        # Rappel dynamique des prix actuels PWM vs MPPT depuis la base
-        pwm_prices = [spec['prix'] for spec in PRIX_EQUIPEMENTS['regulateurs'].values() if spec['type'] == 'PWM']
-        mppt_prices = [spec['prix'] for spec in PRIX_EQUIPEMENTS['regulateurs'].values() if spec['type'] == 'MPPT']
-        if pwm_prices and mppt_prices:
-            st.info(f"Prix actuels (base locale): PWM {min(pwm_prices):,}–{max(pwm_prices):,} FCFA | MPPT {min(mppt_prices):,}–{max(mppt_prices):,} FCFA")
-    
-    elif guide_section == "🔧 Installation et mise en service":
-        st.markdown("""
-        ### Guide d'installation étape par étape
-        
-        #### 1️⃣ Préparation du site
-        
-        **Choix de l'emplacement panneaux:**
-        - ☀️ Orientation plein SUD (hémisphère nord)
-        - 📐 Inclinaison : 13-15° (latitude du Sénégal)
-        - 🌳 Aucune ombre (arbres, bâtiments)
-        - 🏠 Toiture solide ou structure au sol
-        
-        **Emplacement batteries et onduleur:**
-        - 🏠 Local sec et ventilé
-        - 🌡️ À l'abri de la chaleur directe
-        - 🔒 Sécurisé (cadenas, grillage)
-        - ⚡ Proche du tableau électrique
-        
-        ---
-        
-        #### 2️⃣ Installation des panneaux
-        
-        **Étapes:**
-        1. Monter la structure (aluminium ou acier galvanisé)
-        2. Fixer solidement au toit ou au sol
-        3. Installer les panneaux avec pinces
-        4. Câbler en série ou parallèle selon voltage
-        5. Protéger les câbles (gaine UV)
-        
-        **⚠️ Sécurité:**
-        - Travailler par temps sec
-        - Harnais si en hauteur
-        - Gants isolants
-        - Ne jamais court-circuiter
-        
-        ---
-        
-        #### 3️⃣ Installation électrique
-        
-        **Ordre de connexion:**
-        1. **D'abord** connecter les batteries à l'onduleur
-        2. Vérifier la polarité (+ et -)
-        3. Connecter le régulateur/onduleur
-        4. **En dernier** connecter les panneaux
-        
-        **Protection obligatoire:**
-        - ⚡ Disjoncteurs sur chaque ligne
-        - 🔥 Fusibles batteries
-        - ⛈️ Parafoudre (recommandé en saison des pluies)
-        - 🌍 Mise à terre
-        
-        ---
-        
-        #### 4️⃣ Configuration et tests
-        
-        **Paramètres à configurer:**
-        - Voltage batteries (12V/24V/48V)
-        - Type de batterie (GEL/AGM/Lithium)
-        - Seuils de charge/décharge
-        - Priorité solaire ou réseau
-        
-        **Tests à effectuer:**
-        - ✅ Vérifier tous les voltages
-        - ✅ Test de charge solaire
-        - ✅ Test de décharge batterie
-        - ✅ Test de basculement Senelec (si hybride)
-        - ✅ Test des protections
-        
-        ---
-        
-        #### 5️⃣ Mise en service
-        
-        **Check-list finale:**
-        - [ ] Toutes les connexions serrées
-        - [ ] Polarités vérifiées
-        - [ ] Protections en place
-        - [ ] Batteries chargées à 100%
-        - [ ] Paramètres configurés
-        - [ ] Manuel utilisateur remis
-        - [ ] Formation utilisateur faite
-        
-        ---
-        
-        ### ⚠️ IMPORTANT - Normes et réglementations
-        
-        **Au Sénégal:**
-        - Installation par professionnel certifié recommandée
-        - Déclaration à la Senelec si connexion réseau
-        - Respect des normes électriques
-        - Assurance habitation à jour
-        
-        **💡 Conseil:** Faire appel à un installateur certifié pour :
-        - Garantie de 2-5 ans
-        - Installation aux normes
-        - Service après-vente
-        - Aide aux démarches administratives
-        """)
-    
-    elif guide_section == "🛠️ Maintenance et entretien":
-        st.markdown("""
-        ### Guide de maintenance complet
-        
-        #### 🌞 Panneaux solaires
-        
-        **Nettoyage (IMPORTANT au Sénégal !)**
-        
-        La poussière et le sable réduisent la production de **20-40%** !
-        
-        **Fréquence:**
-        - **Saison sèche:** Toutes les 2-3 semaines
-        - **Saison des pluies:** Une fois par mois
-        - Après tempête de sable: Immédiatement
-        
-        **Comment nettoyer:**
-        1. ☀️ Le matin tôt ou le soir (panneaux froids)
-        2. 💧 Eau + savon doux (pas de produits abrasifs)
-        3. 🧽 Éponge douce ou raclette
-        4. 💦 Rincer abondamment à l'eau claire
-        5. ⚠️ Ne JAMAIS nettoyer à sec (rayures)
-        
-        **Inspection visuelle (mensuelle):**
-        - Fissures ou cassures
-        - Connexions desserrées
-        - Câbles endommagés
-        - Corrosion sur la structure
-        
-        ---
-        
-        #### 🔋 Batteries
-        
-        **Batteries PLOMB (entretien requis):**
-        
-        **Tous les mois:**
-        - Vérifier niveau d'eau distillée
-        - Ajouter si nécessaire (jamais d'eau du robinet !)
-        - Nettoyer les bornes (bicarbonate + eau)
-        - Vérifier voltage de chaque batterie
-        
-        **Tous les 3 mois:**
-        - Égalisation des batteries (charge complète)
-        - Resserrer les connexions
-        - Vérifier densité électrolyte (densimètre)
-        
-        **Batteries AGM/GEL/Lithium (sans entretien):**
-        
-        **Tous les 3 mois:**
-        - Vérifier voltage
-        - Nettoyer les bornes
-        - Vérifier température (ne doit pas dépasser 45°C)
-        
-        **⚠️ Signes de batterie fatiguée:**
-        - Se décharge trop vite
-        - Ne charge pas complètement
-        - Gonflement ou fuite
-        - Température excessive
-        
-        → **Remplacer immédiatement !**
-        
-        ---
-        
-        #### ⚡ Onduleur et régulateur
-        
-        **Tous les mois:**
-        - Nettoyer ventilation (air comprimé)
-        - Vérifier écran/voyants
-        - Noter les statistiques
-        - Écouter bruits anormaux
-        
-        **Tous les 6 mois:**
-        - Vérifier toutes connexions
-        - Nettoyer l'intérieur (poussière)
-        - Mettre à jour firmware si disponible
-        - Test complet du système
-        
-        ---
-        
-        #### 🔌 Installation électrique
-        
-        **Tous les 6 mois:**
-        - Resserrer toutes connexions
-        - Vérifier état des câbles
-        - Tester les protections (disjoncteurs)
-        - Vérifier mise à terre
-        - Inspection parafoudre
-        
-        ---
-        
-        ### 📋 Calendrier de maintenance annuel
-        """)
-        
-        st.info("""
-        **JANVIER - FÉVRIER - MARS (Saison sèche)**
-        - Nettoyage panneaux toutes les 2 semaines
-        - Attention à la poussière saharienne
-        
-        **AVRIL - MAI - JUIN (Avant hivernage)**
-        - Révision complète du système
-        - Vérifier parafoudres
-        - Resserrer structure panneaux
-        
-        **JUILLET - AOÛT - SEPTEMBRE (Hivernage)**
-        - Surveillance accrue
-        - Vérifier étanchéité
-        - Nettoyage après grosses pluies
-        
-        **OCTOBRE - NOVEMBRE - DÉCEMBRE**
-        - Bilan annuel
-        - Remplacement pièces usées
-        - Préparation saison sèche
-        """)
-        
-        st.success("""
-        ### 💡 Conseils pour prolonger la durée de vie
-        
-        **Batteries:**
-        - Ne jamais décharger complètement
-        - Éviter les températures > 40°C
-        - Recharger immédiatement après usage
-        
-        **Panneaux:**
-        - Nettoyage régulier = +30% production
-        - Protection contre grêle (rare mais possible)
-        
-        **Onduleur:**
-        - Ventilation suffisante
-        - Ne pas surcharger
-        - Éteindre si problème
-        """)
-    
-    elif guide_section == "⚠️ Problèmes courants et solutions":
-        st.markdown("""
-        ### Diagnostic et résolution des problèmes
-        
-        #### 🔋 Batteries se déchargent trop vite
-        
-        **Causes possibles:**
-        - 🔴 Batteries vieilles ou fatiguées
-        - 🔴 Trop de consommation
-        - 🔴 Panneaux sales ou défaillants
-        - 🔴 Régulateur défectueux
-        
-        **Solutions:**
-        1. Vérifier âge des batteries
-        2. Mesurer voltage au repos (> 12.6V pour batterie 12V chargée)
-        3. Nettoyer les panneaux
-        4. Réduire consommation temporairement
-        5. Vérifier connections
-        
-        ---
-        
-        #### ☀️ Production solaire faible
-        
-        **Causes possibles:**
-        - 🔴 Panneaux sales (poussière/sable)
-        - 🔴 Ombre sur panneaux
-        - 🔴 Mauvaise orientation
-        - 🔴 Câbles endommagés
-        - 🔴 Régulateur mal configuré
-        
-        **Solutions:**
-        1. **Nettoyer immédiatement** (gain de 30% instantané)
-        2. Vérifier absence d'ombre (matin et après-midi)
-        3. Vérifier voltage panneaux au soleil
-        4. Inspecter câbles et connexions
-        5. Reconfigurer régulateur
-        
-        ---
-        
-        #### ⚡ Onduleur fait du bruit ou s'arrête
-        
-        **Bips répétés:**
-        - 🔴 Batteries faibles → Recharger ou réduire charge
-        - 🔴 Surcharge → Éteindre appareils non essentiels
-        - 🔴 Surchauffe → Améliorer ventilation
-        
-        **Arrêt complet:**
-        - 🔴 Protection activée → Vérifier cause (surcharge, court-circuit)
-        - 🔴 Batteries trop faibles → Recharger avec Senelec
-        - 🔴 Défaut interne → Contacter technicien
-        
-        **Solutions:**
-        1. Consulter manuel (codes d'erreur)
-        2. Réduire charge immédiatement
-        3. Laisser refroidir si surchauffe
-        4. Redémarrer après résolution
-        
-        ---
-        
-        #### 🌡️ Surchauffe des équipements
-        
-        **Batteries chaudes (> 45°C):**
-        - ⚠️ DANGER : Risque d'explosion
-        - Améliorer ventilation
-        - Réduire charge immédiate
-        - Vérifier surcharge du régulateur
-        
-        **Onduleur chaud:**
-        - Normal sous charge, mais doit rester < 60°C
-        - Nettoyer ventilateur
-        - Ajouter ventilation externe
-        - Ne pas enfermer dans meuble
-        
-        ---
-        
-        #### 🔌 Appareils ne fonctionnent pas
-        
-        **Vérifications:**
-        1. ✅ Onduleur allumé ?
-        2. ✅ Batteries chargées ?
-        3. ✅ Disjoncteur activé ?
-        4. ✅ Appareil compatible ?
-        5. ✅ Surcharge ?
-        
-        **Appareils sensibles:**
-        - Certains appareils nécessitent onde pure sinus
-        - Moteurs nécessitent 3x leur puissance au démarrage
-        - Appareils électroniques peuvent ne pas fonctionner avec onde modifiée
-        
-        ---
-        
-        #### 💧 Problèmes après la pluie
-        
-        **Infiltration d'eau:**
-        - Sécher immédiatement
-        - Vérifier étanchéité boîtiers
-        - Remplacer si corrosion
-        
-        **Baisse de production:**
-        - Normal si temps nuageux
-        - Nettoyer panneaux (pluie = boue)
-        
-        ---
-        
-        ### 🆘 Quand appeler un technicien ?
-        
-        **Appelez immédiatement si:**
-        - ⚠️ Fumée ou odeur de brûlé
-        - ⚠️ Étincelles ou arcs électriques
-        - ⚠️ Batteries gonflées ou qui fuient
-        - ⚠️ Choc électrique
-        - ⚠️ Chute de panneau
-        
-        **Appelez rapidement si:**
-        - Problème non résolu après vérifications basiques
-        - Équipement endommagé
-        - Performances très dégradées
-        - Doute sur la sécurité
-        
-        ---
-        
-        ### 📞 Contacts utiles
-        
-        """)
-        
-        st.info("""
-        **Fournisseurs au Sénégal:**
-        - Solaire Sénégal: energiesolairesenegal.com
-        - ANER (Agence Nationale pour les Énergies Renouvelables)
-        
-        **Urgences électriques:**
-        - Senelec: 800 00 00 93
-        
-        **Ayez toujours:**
-        - Numéro de votre installateur
-        - Garanties et factures
-        - Manuel d'utilisation
-        """)
-    
-    elif guide_section == "💵 Prix indicatifs des équipements":
-        st.markdown("### Prix indicatifs des équipements (base locale)")
-        colp, colb = st.columns([1,1])
-        with colp:
-            st.subheader("Panneaux")
-            data_p = []
-            for nom, specs in PRIX_EQUIPEMENTS['panneaux'].items():
-                p = specs.get('puissance', 0)
-                price = specs.get('prix', 0)
-                ppw = (price / p) if p else None
-                data_p.append({"Référence": nom, "Puissance (W)": p, "Prix (FCFA)": price, "Prix/W": round(ppw, 2) if ppw else None})
-            df_p = pd.DataFrame(data_p).sort_values(by=["Puissance (W)"], ascending=False)
-            st.dataframe(df_p, use_container_width=True)
-        with colb:
-            st.subheader("Batteries")
-            data_b = []
-            for nom, specs in PRIX_EQUIPEMENTS['batteries'].items():
-                data_b.append({"Référence": nom, "Type": specs.get('type'), "Capacité (Ah)": specs.get('capacite'), "Tension (V)": specs.get('voltage'), "Prix (FCFA)": specs.get('prix')})
-            df_b = pd.DataFrame(data_b).sort_values(by=["Type","Capacité (Ah)"])
-            st.dataframe(df_b, use_container_width=True)
-        col1, col2 = st.columns([1,1])
-        with col1:
-            st.subheader("Onduleurs")
-            data_o = []
-            for nom, specs in PRIX_EQUIPEMENTS['onduleurs'].items():
-                data_o.append({"Référence": nom, "Type": specs.get('type'), "Puissance (W)": specs.get('puissance'), "Tension (V)": specs.get('voltage'), "Prix (FCFA)": specs.get('prix')})
-            df_o = pd.DataFrame(data_o).sort_values(by=["Type","Puissance (W)"])
-            st.dataframe(df_o, use_container_width=True)
-        with col2:
-            st.subheader("Régulateurs")
-            data_r = []
-            for nom, specs in PRIX_EQUIPEMENTS['regulateurs'].items():
-                data_r.append({"Référence": nom, "Type": specs.get('type'), "Intensité (A)": specs.get('amperage'), "Tension max (V)": specs.get('voltage_max'), "Prix (FCFA)": specs.get('prix')})
-            df_r = pd.DataFrame(data_r).sort_values(by=["Type","Intensité (A)"])
-            st.dataframe(df_r, use_container_width=True)
-        st.markdown("---")
-        st.subheader("Installation et accessoires")
-        accessoires_pct_def = 15
-        st.markdown(f"Accessoires: environ {accessoires_pct_def}% du matériel (câbles, protections, structure)")
-        inst_table = pd.DataFrame([{"Catégorie": k, "Forfait (FCFA)": v} for k, v in PRIX_INSTALLATION.items()])
-        st.dataframe(inst_table, use_container_width=True)
-        def _min_max(items, key="prix"):
-            vals = [v.get(key, 0) for v in items.values() if v.get(key, 0)]
-            return (min(vals) if vals else None, max(vals) if vals else None)
-        pmin, pmax = _min_max(PRIX_EQUIPEMENTS['panneaux'])
-        bmin, bmax = _min_max(PRIX_EQUIPEMENTS['batteries'])
-        omin, omax = _min_max(PRIX_EQUIPEMENTS['onduleurs'])
-        rpm, rpx = _min_max(PRIX_EQUIPEMENTS['regulateurs'])
-        st.info(f"Repères de prix: Panneaux {pmin:,}–{pmax:,} FCFA | Batteries {bmin:,}–{bmax:,} FCFA | Onduleurs {omin:,}–{omax:,} FCFA | Régulateurs {rpm:,}–{rpx:,} FCFA")
-    
-    elif guide_section == "💡 Conseils d'optimisation":
-        st.markdown("""
-        ### Maximisez votre production et économies
-        
-        #### 🌞 Optimiser la production solaire
-        
-        **1. Orientation et inclinaison parfaites**
-        - Orientation: Plein SUD (hémisphère nord)
-        - Inclinaison: 13-15° pour le Sénégal
-        - Révision 2x/an: mars et septembre
-        
-        **2. Éliminer les ombres**
-        - Même une petite ombre réduit production de 30%
-        - Élaguer arbres régulièrement
-        - Attention aux nouvelles constructions
-        
-        **3. Nettoyage optimal**
-        - **Saison sèche:** Tous les 15 jours minimum
-        - Tôt le matin (6h-8h) ou soir (18h-19h)
-        - Gain immédiat: +20 à 40%
-        
-        **4. Câblage adapté**
-        - Câbles courts = moins de perte
-        - Section suffisante (4mm² minimum)
-        - Connexions propres et serrées
-        
-        ---
-        
-        #### 💰 Réduire la consommation
-        
-        **Appareils économes recommandés:**
-        
-        **Éclairage:**
-        - ✅ LED 10W au lieu de ampoule 60W
-        - Économie: 50W x 6h = 300Wh/jour
-        - = 109 kWh/an économisés
-        
-        **Réfrigération:**
-        - ✅ Frigo classe A+++ (100W) au lieu de classe B (200W)
-        - Économie: 100W x 12h = 1,2 kWh/jour
-        - = 438 kWh/an économisés
-        
-        **Ventilation:**
-        - ✅ Ventilateur DC 12V (25W) au lieu de AC (75W)
-        - Économie: 50W x 10h = 500Wh/jour
-        - = 182 kWh/an économisés
-        
-        **Habitudes intelligentes:**
-        - ❌ Éteindre veilles (TV, chargeurs)
-        - ❌ Débrancher ce qui ne sert pas
-        - ✅ Utiliser appareils aux heures ensoleillées
-        - ✅ Charger téléphones en journée
-        
-        ---
-        
-        #### 🔋 Prolonger vie des batteries
-        
-        **Règle d'or: Ne jamais décharger complètement**
-        
-        **Profondeurs de décharge recommandées:**
-        - Plomb: 50% maximum
-        - AGM/GEL: 70% maximum
-        - Lithium: 80-90% maximum
-        
-        **Conseils pratiques:**
-        1. Configurer arrêt automatique onduleur à 50-60%
-        2. Éviter décharges profondes répétées
-        3. Recharger immédiatement après usage intensif
-        4. Maintenir température < 40°C
-        5. Égaliser batteries plomb tous les 3 mois
-        
-        **Impact température:**
-        - 25°C = durée de vie normale
-        - 35°C = -20% durée de vie
-        - 45°C = -50% durée de vie
-        → **Ventiler le local batteries !**
-        
-        ---
-        
-        #### ⚡ Gérer les pics de consommation
-        
-        **Appareils à forte consommation:**
-        - Fer à repasser: 1000-2000W
-        - Bouilloire: 2000W
-        - Four micro-ondes: 800-1200W
-        - Machine à laver: 2000W
-        
-        **Stratégies:**
-        1. **Utiliser en journée** (soleil + batterie)
-        2. **Un à la fois** (pas de cumul)
-        3. **Version économe** (bouilloire gaz, fer léger)
-        4. **Planifier** les lessives
-        
-        ---
-        
-        #### 🌐 Monitoring et suivi
-        
-        **Surveiller ces indicateurs:**
-        - Production solaire journalière (kWh)
-        - État de charge batteries (%)
-        - Consommation journalière (kWh)
-        - Température équipements
-        
-        **Applications disponibles:**
-        - Certains onduleurs ont WiFi/Bluetooth
-        - Monitoring en temps réel
-        - Alertes sur smartphone
-        - Historiques et statistiques
-        
-        ---
-        
-        #### 💡 Astuces spéciales Sénégal
-        
-        **Saison sèche (Nov-Mai):**
-        - Production maximale
-        - Nettoyages fréquents (poussière)
-        - Profiter pour gros appareils
-        
-        **Hivernage (Juin-Oct):**
-        - Production réduite (nuages)
-        - Économiser batterie
-        - Utiliser Senelec si hybride
-        - Vérifier parafoudres
-        
-        **Harmattan (déc-fév):**
-        - Poussière saharienne intense
-        - Nettoyage tous les 10 jours !
-        - Perte jusqu'à 40% si sale
-        
-        ---
-        
-        ### 🎯 Plan d'action: Première année
-        """)
-        
-        st.success("""
-        **Mois 1-3: Rodage**
-        - Observer et noter consommation
-        - Ajuster habitudes
-        - Apprendre système
-        
-        **Mois 3-6: Optimisation**
-        - Identifier gaspillages
-        - Remplacer appareils énergivores
-        - Automatiser charge batteries
-        
-        **Mois 6-12: Maîtrise**
-        - Routine établie
-        - Maintenance préventive
-        - Économies maximales
-        
-        **Objectif:**
-        - Facture Senelec: -70 à 100%
-        - Autonomie: 90-100%
-        - ROI: 5-7 ans
-        """)
-        
-        st.info("""
-        ### 📊 Checklist mensuelle d'optimisation
-        
-        - [ ] Panneaux propres
-        - [ ] Batteries niveau OK
-        - [ ] Connexions serrées
-        - [ ] Ventilation efficace
-        - [ ] Pas d'ombres nouvelles
-        - [ ] Consommation stable
-        - [ ] Production optimale
-        - [ ] Équipements < 45°C
-        """)
+            # Sélection de catégorie
+            categories = list(PRIX_EQUIPEMENTS.keys())
+            selected_category = st.selectbox("Choisir une catégorie", categories)
+            
+            if selected_category:
+                st.markdown(f"#### {selected_category.title()}")
+                
+                # Afficher les équipements de la catégorie (union des valeurs par défaut et Firebase)
+                equipements = {**PRIX_EQUIPEMENTS[selected_category], **current_prices.get(selected_category, {})}
+                
+                # Créer un formulaire pour modifier les prix
+                with st.form(f"form_{selected_category}"):
+                    modified_prices = {}
+                    
+                    for nom_equipement, details in equipements.items():
+                        col1, col2 = st.columns([2, 1])
+                        with col1:
+                            st.write(f"**{nom_equipement}**")
+                        with col2:
+                            # Utiliser le prix actuel (Firebase ou défaut)
+                            current_price = current_prices.get(selected_category, {}).get(nom_equipement, {}).get('prix', details['prix'])
+                            new_price = st.number_input(
+                                f"Prix (FCFA)",
+                                min_value=0,
+                                value=int(current_price),
+                                step=1000,
+                                key=f"price_{selected_category}_{nom_equipement}"
+                            )
+                            modified_prices[nom_equipement] = {**details, 'prix': new_price}
+                    
+                    if st.form_submit_button("💾 Sauvegarder les prix"):
+                        # Mettre à jour les prix dans la structure complète
+                        updated_prices = current_prices.copy()
+                        updated_prices[selected_category] = modified_prices
+                        
+                        # Sauvegarder dans Firebase
+                        if save_equipment_prices(updated_prices):
+                            st.success(f"✅ Prix de la catégorie '{selected_category}' sauvegardés avec succès!")
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("❌ Erreur lors de la sauvegarde")
+            
+            # Ajout d'un nouvel article
+            st.markdown("---")
+            st.markdown("### ➕ Ajouter un nouvel article")
+            
+            with st.form(f"add_item_{selected_category}"):
+                new_name = st.text_input("Nom de l'article")
+                
+                if selected_category == "panneaux":
+                    new_puissance = st.number_input("Puissance (W)", min_value=0, step=10)
+                    new_type = st.selectbox("Type", ["Polycristallin", "Monocristallin"]) 
+                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
+                    new_item = {
+                        "puissance": int(new_puissance),
+                        "type": new_type,
+                        "prix": int(new_price)
+                    }
+                elif selected_category == "batteries":
+                    new_capacite = st.number_input("Capacité (Ah)", min_value=0, step=10)
+                    new_voltage = st.number_input("Voltage (V)", min_value=0, step=12)
+                    new_type = st.selectbox("Type", ["Plomb", "AGM", "GEL", "Lithium"]) 
+                    new_cycles = st.number_input("Cycles", min_value=0, step=100)
+                    new_decharge = st.number_input("Décharge max (%)", min_value=0, max_value=100, step=5)
+                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
+                    new_item = {
+                        "capacite": int(new_capacite),
+                        "voltage": int(new_voltage),
+                        "type": new_type,
+                        "cycles": int(new_cycles),
+                        "decharge_max": int(new_decharge),
+                        "prix": int(new_price)
+                    }
+                elif selected_category == "onduleurs":
+                    new_puissance = st.number_input("Puissance (W)", min_value=0, step=100)
+                    new_voltage = st.number_input("Voltage (V)", min_value=0, step=12)
+                    new_type = st.selectbox("Type", ["Off-Grid", "Hybride", "Online", "Online Tri"]) 
+                    new_mppt = st.text_input("MPPT (optionnel)")
+                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
+                    new_item = {
+                        "puissance": int(new_puissance),
+                        "voltage": int(new_voltage),
+                        "type": new_type,
+                        "mppt": new_mppt,
+                        "prix": int(new_price)
+                    }
+                elif selected_category == "regulateurs":
+                    new_amperage = st.number_input("Ampérage (A)", min_value=0, step=5)
+                    new_type = st.selectbox("Type", ["PWM", "MPPT"]) 
+                    new_voltage_max = st.number_input("Voltage max (V)", min_value=0, step=12)
+                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
+                    new_item = {
+                        "amperage": int(new_amperage),
+                        "type": new_type,
+                        "voltage_max": int(new_voltage_max),
+                        "prix": int(new_price)
+                    }
+                else:
+                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
+                    new_item = {"prix": int(new_price)}
+                
+                add_submit = st.form_submit_button("➕ Ajouter l'article")
+                if add_submit:
+                    if not new_name or len(new_name.strip()) < 2:
+                        st.warning("⚠️ Veuillez renseigner un nom d'article valide")
+                    else:
+                        updated_prices = current_prices.copy()
+                        if selected_category not in updated_prices:
+                            updated_prices[selected_category] = {}
+                        updated_prices[selected_category][new_name] = new_item
+                        if save_equipment_prices(updated_prices):
+                            st.success(f"✅ Article '{new_name}' ajouté dans '{selected_category}' !")
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("❌ Erreur lors de l'ajout de l'article")
+            
+            # Réinitialisation seulement
+            st.markdown("---")
+            st.markdown("### 🔁 Réinitialiser aux valeurs par défaut")
+            if st.button("🔄 Réinitialiser aux valeurs par défaut", type="secondary"):
+                if save_equipment_prices(PRIX_EQUIPEMENTS):
+                    st.success("✅ Tous les prix ont été réinitialisés aux valeurs par défaut!")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("❌ Erreur lors de la réinitialisation")
+        
+        with admin_tab2:
+            st.subheader("📋 Devis Partagés par les Clients")
+            
+            # Charger tous les devis depuis Firebase
+            quotes = get_all_quotes()
+            
+            if quotes:
+                st.success(f"✅ {len(quotes)} devis trouvé(s)")
+                
+                # Filtres
+                col_filter1, col_filter2 = st.columns(2)
+                with col_filter1:
+                    filter_voltage = st.selectbox("Filtrer par voltage", ["Tous", "12V", "24V", "48V"])
+                with col_filter2:
+                    filter_battery = st.selectbox("Filtrer par batterie", ["Tous", "Lithium", "Plomb"])
+                
+                # Appliquer les filtres
+                filtered_quotes = quotes
+                if filter_voltage != "Tous":
+                    filtered_quotes = [q for q in filtered_quotes if str(q.get('voltage_systeme', '')) + 'V' == filter_voltage]
+                if filter_battery != "Tous":
+                    filtered_quotes = [q for q in filtered_quotes if q.get('type_batterie', '') == filter_battery]
+                
+                st.info(f"📊 {len(filtered_quotes)} devis après filtrage")
+                
+                # Afficher les devis
+                for i, quote in enumerate(filtered_quotes):
+                    ci_header = quote.get('contact_info', {})
+                    _nom_client = ci_header.get('name', '') or 'Client'
+                    _ville_client = ci_header.get('ville', '')
+                    _titre_devis = f"Devis #{i+1} - {quote.get('timestamp', 'Date inconnue')[:10]} - {quote.get('prix_total_fcfa', 0):,} FCFA - {_nom_client}" + (f" - {_ville_client}" if _ville_client else "")
+                    with st.expander(_titre_devis):
+                        col_info1, col_info2, col_info3 = st.columns(3)
+                        
+                        with col_info1:
+                            st.metric("Consommation", f"{quote.get('consommation_kwh_jour', 0):.1f} kWh/jour")
+                            st.metric("Voltage", f"{quote.get('voltage_systeme', 'N/A')}V")
+                        
+                        with col_info2:
+                            st.metric("Puissance", f"{quote.get('puissance_totale_kwc', 0):.2f} kWc")
+                            st.metric("Batterie", quote.get('type_batterie', 'N/A'))
+                        
+                        with col_info3:
+                            st.metric("Prix total", f"{quote.get('prix_total_fcfa', 0):,} FCFA")
+                            st.metric("ROI", f"{quote.get('retour_investissement_ans', 0):.1f} ans")
+                        
+                        # Détails des équipements
+                        if 'details_equipements' in quote:
+                            st.markdown("**Détails des équipements:**")
+                            details_df = pd.DataFrame(quote['details_equipements'])
+                            st.dataframe(details_df, use_container_width=True)
+                        
+                        # Informations de contact
+                        st.markdown("**Informations:**")
+                        st.write(f"- Autonomie souhaitée: {quote.get('autonomie_souhaitee_pct', 'N/A')}%")
+                        st.write(f"- Autonomie réelle: {quote.get('autonomie_reelle_pct', 'N/A')}%")
+                        st.write(f"- Économie mensuelle: {quote.get('economie_mensuelle_fcfa', 0):,} FCFA")
+                        ci = quote.get('contact_info', {})
+                        st.markdown("**Contact client:**")
+                        st.write(f"- Nom: {ci.get('name', 'N/A')}")
+                        st.write(f"- Téléphone: {ci.get('phone', 'N/A')}")
+                        st.write(f"- Email: {ci.get('email', 'N/A')}")
+                        st.write(f"- Ville: {ci.get('ville', 'N/A')}")
+                        st.write(f"- Quartier: {ci.get('quartier', 'N/A')}")
+                        st.write(f"- Type de bâtiment: {ci.get('type_batiment', 'N/A')}")
+                        st.write(f"- Urgence: {ci.get('urgence', 'N/A')}")
+                        st.write(f"- Budget estimé: {ci.get('budget_estime', 'N/A')}")
+                        st.write(f"- Installation existante: {ci.get('installation_existante', 'N/A')}")
+                        st.write(f"- Visite technique: {'Oui' if ci.get('visite_technique', False) else 'Non'}")
+                        st.write(f"- Commentaires: {ci.get('commentaires', 'N/A')}")
+                        st.write(f"- Source: {ci.get('source', 'N/A')}")
+                        st.write(f"- Contact autorisé: {'Oui' if ci.get('demande_contact', False) else 'Non'}")
 
-# Footer
+                        # Actions Admin pour ce devis
+                        st.markdown("---")
+                        st.markdown("**⚙️ Actions Admin**")
+                        _confirm_del_q = st.checkbox(
+                            "Confirmer la suppression de ce devis",
+                            key=f"confirm_del_quote_{quote.get('id','')}"
+                        )
+                        if st.button(
+                            "🗑️ Supprimer ce devis",
+                            key=f"btn_del_quote_{quote.get('id','')}"
+                        ):
+                            if _confirm_del_q:
+                                if delete_quote(quote.get('id')):
+                                    st.success("✅ Devis supprimé.")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Échec de suppression du devis.")
+                            else:
+                                st.warning("Veuillez cocher la confirmation avant suppression.")
+            else:
+                st.info("📭 Aucun devis partagé pour le moment")
+        
+        with admin_tab3:
+            st.subheader("📞 Gestion des Demandes Clients")
+            
+            # Charger toutes les demandes depuis Firebase
+            client_requests = get_all_client_requests()
+            
+            if client_requests:
+                st.success(f"✅ {len(client_requests)} demande(s) trouvée(s)")
+                
+                # Statistiques rapides
+                col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+                
+                # Compter par statut
+                status_counts = {}
+                for req in client_requests:
+                    status = req.get('status', 'nouveau')
+                    status_counts[status] = status_counts.get(status, 0) + 1
+                
+                with col_stat1:
+                    st.metric("🆕 Nouvelles", status_counts.get('nouveau', 0))
+                with col_stat2:
+                    st.metric("📞 En cours", status_counts.get('en_cours', 0))
+                with col_stat3:
+                    st.metric("✅ Traitées", status_counts.get('traite', 0))
+                with col_stat4:
+                    st.metric("📊 Total", len(client_requests))
+                
+                # Filtres
+                st.markdown("### 🔍 Filtres")
+                col_filter1, col_filter2, col_filter3 = st.columns(3)
+                
+                with col_filter1:
+                    filter_status = st.selectbox("Statut", ["Tous", "nouveau", "en_cours", "traite"])
+                with col_filter2:
+                    filter_urgence = st.selectbox("Urgence", ["Toutes", "Urgent (< 1 mois)", "Court terme (1-3 mois)", "Moyen terme (3-6 mois)", "Pas urgent (> 6 mois)"])
+                with col_filter3:
+                    filter_ville = st.selectbox("Ville", ["Toutes"] + list(set([req.get('ville', '') for req in client_requests if req.get('ville')])))
+                
+                # Appliquer les filtres
+                filtered_requests = client_requests
+                if filter_status != "Tous":
+                    filtered_requests = [r for r in filtered_requests if r.get('status', 'nouveau') == filter_status]
+                if filter_urgence != "Toutes":
+                    filtered_requests = [r for r in filtered_requests if r.get('urgence', '') == filter_urgence]
+                if filter_ville != "Toutes":
+                    filtered_requests = [r for r in filtered_requests if r.get('ville', '') == filter_ville]
+                
+                st.info(f"📊 {len(filtered_requests)} demande(s) après filtrage")
+                
+                # Trier par date (plus récent en premier)
+                filtered_requests.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+                
+                # Afficher les demandes
+                for i, request in enumerate(filtered_requests):
+                    # Couleur selon le statut
+                    status = request.get('status', 'nouveau')
+                    if status == 'nouveau':
+                        status_color = "🆕"
+                        status_text = "Nouveau"
+                    elif status == 'en_cours':
+                        status_color = "📞"
+                        status_text = "En cours"
+                    else:
+                        status_color = "✅"
+                        status_text = "Traité"
+                    
+                    # Urgence
+                    urgence = request.get('urgence', '')
+                    urgence_icon = "🔴" if "Urgent" in urgence else "🟡" if "Court terme" in urgence else "🟢"
+                    
+                    # Titre de l'expandeur
+                    timestamp = request.get('timestamp', '')[:16].replace('T', ' ')
+                    title = f"{status_color} {request.get('nom_client', 'Client')} - {request.get('ville', '')} - {timestamp} {urgence_icon}"
+                    
+                    with st.expander(title, expanded=(status == 'nouveau')):
+                        # Informations client
+                        col_client1, col_client2, col_client3 = st.columns(3)
+                        
+                        with col_client1:
+                            st.markdown("**👤 Informations Client**")
+                            st.write(f"**Nom:** {request.get('nom_client', 'N/A')}")
+                            st.write(f"**Téléphone:** {request.get('telephone', 'N/A')}")
+                            st.write(f"**Email:** {request.get('email_client', 'Non fourni')}")
+                            st.write(f"**Ville:** {request.get('ville', 'N/A')}")
+                            st.write(f"**Quartier:** {request.get('quartier', 'Non précisé')}")
+                        
+                        with col_client2:
+                            st.markdown("**🏠 Projet**")
+                            st.write(f"**Type:** {request.get('type_batiment', 'N/A')}")
+                            st.write(f"**Urgence:** {urgence_icon} {request.get('urgence', 'N/A')}")
+                            st.write(f"**Budget:** {request.get('budget_estime', 'N/A')}")
+                            st.write(f"**Installation:** {request.get('installation_existante', 'N/A')}")
+                            visite = "✅ Oui" if request.get('visite_technique') else "❌ Non"
+                            st.write(f"**Visite technique:** {visite}")
+                        
+                        with col_client3:
+                            st.markdown("**⚡ Dimensionnement**")
+                            dim = request.get('dimensionnement', {})
+                            st.write(f"**Consommation:** {dim.get('consommation_kwh_jour', 0):.1f} kWh/jour")
+                            st.write(f"**Puissance:** {dim.get('puissance_totale_kwc', 0):.2f} kWc")
+                            st.write(f"**Voltage:** {dim.get('voltage_systeme', 'N/A')}V")
+                            st.write(f"**Batterie:** {dim.get('type_batterie', 'N/A')}")
+                            st.write(f"**Prix total:** {dim.get('prix_total_fcfa', 0):,} FCFA")
+                        
+                        # Commentaires client
+                        if request.get('commentaires'):
+                            st.markdown("**💬 Commentaires du client:**")
+                            st.info(request.get('commentaires'))
+                        
+                        # Gestion admin
+                        st.markdown("---")
+                        st.markdown("**⚙️ Actions Admin**")
+                        
+                        col_action1, col_action2 = st.columns(2)
+                        
+                        with col_action1:
+                            # Changer le statut
+                            new_status = st.selectbox(
+                                "Statut",
+                                ["nouveau", "en_cours", "traite"],
+                                index=["nouveau", "en_cours", "traite"].index(status),
+                                key=f"status_{i}"
+                            )
+                        
+                        with col_action2:
+                            # Notes admin
+                            admin_notes = st.text_area(
+                                "Notes admin",
+                                value=request.get('admin_notes', ''),
+                                placeholder="Ajouter des notes sur le suivi...",
+                                height=100,
+                                key=f"notes_{i}"
+                            )
+                        
+                        # Boutons d'action
+                        col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
+                        
+                        with col_btn1:
+                            if st.button(f"💾 Mettre à jour", key=f"update_{i}"):
+                                if update_client_request_status(request['id'], new_status, admin_notes):
+                                    st.success("✅ Demande mise à jour!")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Erreur lors de la mise à jour")
+                        
+                        with col_btn2:
+                            # Lien pour appeler
+                            phone = request.get('telephone', '').replace(' ', '').replace('+', '')
+                            if phone:
+                                st.markdown(f"📞 [Appeler]({f'tel:{phone}'})")
+                        
+                        with col_btn3:
+                            # Lien pour envoyer email
+                            email = request.get('email_client', '')
+                            if email:
+                                subject = f"Votre demande de dimensionnement solaire - {request.get('nom_client', '')}"
+                                st.markdown(f"📧 [Email](mailto:{email}?subject={subject})")
+                        
+                        with col_btn4:
+                            _confirm_del_r = st.checkbox(
+                                "Confirmer suppression",
+                                key=f"confirm_del_req_{request.get('id','')}"
+                            )
+                            if st.button("🗑️ Supprimer", key=f"btn_del_req_{request.get('id','')}"):
+                                if _confirm_del_r:
+                                    if delete_client_request(request.get('id')):
+                                        st.success("✅ Demande supprimée.")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Échec de suppression de la demande.")
+                                else:
+                                    st.warning("Veuillez cocher la confirmation avant suppression.")
+                        
+                        # Informations système
+                        st.markdown("---")
+                        st.caption(f"**ID:** {request.get('id', 'N/A')[:8]}... | **Créé:** {timestamp} | **Source:** {request.get('source', 'N/A')}")
+                
+                # Actions en lot
+                st.markdown("---")
+                st.markdown("### 🔧 Actions en lot")
+                col_bulk1, col_bulk2 = st.columns(2)
+                
+                with col_bulk1:
+                    if st.button("📊 Exporter en CSV"):
+                        # Préparer les données pour export
+                        export_data = []
+                        for req in filtered_requests:
+                            dim = req.get('dimensionnement', {})
+                            export_data.append({
+                                'Date': req.get('timestamp', '')[:10],
+                                'Nom': req.get('nom_client', ''),
+                                'Téléphone': req.get('telephone', ''),
+                                'Email': req.get('email_client', ''),
+                                'Ville': req.get('ville', ''),
+                                'Type_Batiment': req.get('type_batiment', ''),
+                                'Urgence': req.get('urgence', ''),
+                                'Budget': req.get('budget_estime', ''),
+                                'Consommation_kWh': dim.get('consommation_kwh_jour', 0),
+                                'Puissance_kWc': dim.get('puissance_totale_kwc', 0),
+                                'Prix_FCFA': dim.get('prix_total_fcfa', 0),
+                                'Statut': req.get('status', 'nouveau'),
+                                'Notes_Admin': req.get('admin_notes', '')
+                            })
+                        
+                        if export_data:
+                            df_export = pd.DataFrame(export_data)
+                            csv = df_export.to_csv(index=False)
+                            st.download_button(
+                                label="💾 Télécharger CSV",
+                                data=csv,
+                                file_name=f"demandes_clients_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                                mime="text/csv"
+                            )
+                
+                with col_bulk2:
+                    if st.button("🔄 Actualiser"):
+                        st.rerun()
+            
+            else:
+                st.info("📭 Aucune demande client pour le moment")
+                st.markdown("Les demandes apparaîtront ici quand les clients utiliseront le formulaire de contact dans l'onglet Dimensionnement.")
+
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
