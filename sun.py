@@ -1796,7 +1796,9 @@ L'utilisateur a dimensionné une installation avec:
                 choix_opt['type_regulateur'] = opt['type_regulateur']
 
             equip_opt = selectionner_equipements(dim_opt, choix_opt)
-            devis_opt = calculer_devis(equip_opt, use_online=False, accessoires_rate=options_accessoires_pct/100.0)
+            # S'assurer que options_accessoires_pct n'est jamais None
+            taux_accessoires_final = options_accessoires_pct if options_accessoires_pct is not None else TAUX_ACCESSOIRES_DEFAUT
+            devis_opt = calculer_devis(equip_opt, use_online=False, accessoires_rate=taux_accessoires_final/100.0)
             with st.expander(f"{opt['nom']} – Total: {devis_opt['total']:,} FCFA", expanded=False):
                 st.markdown(f"• Batterie: {opt['type_batterie']}")
                 st.markdown(f"• Onduleur: {opt['type_onduleur']}")
