@@ -243,3 +243,97 @@ def delete_client_request(request_id: str) -> bool:
     except Exception as e:
         st.error(f"Erreur suppression demande: {e}")
     return False
+
+def save_labor_percentages(percentages_data):
+    """Sauvegarde les pourcentages de main d'œuvre par région dans Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            db.collection('config').document('labor_percentages').set(percentages_data)
+            return True
+    except Exception as e:
+        st.error(f"Erreur sauvegarde pourcentages main d'œuvre: {e}")
+        return False
+
+@st.cache_data(ttl=3600)
+def get_labor_percentages():
+    """Récupère les pourcentages de main d'œuvre depuis Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            doc = db.collection('config').document('labor_percentages').get()
+            if doc.exists:
+                return doc.to_dict()
+    except Exception as e:
+        st.error(f"Erreur récupération pourcentages main d'œuvre: {e}")
+    return None
+
+def clear_labor_percentages_cache():
+    """Vide le cache des pourcentages de main d'œuvre"""
+    get_labor_percentages.clear()
+
+def save_accessories_rate(rate_data):
+    """Sauvegarde le taux d'accessoires dans Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            db.collection('config').document('accessories_rate').set(rate_data)
+            return True
+    except Exception as e:
+        st.error(f"Erreur sauvegarde taux accessoires: {e}")
+        return False
+
+@st.cache_data(ttl=3600)
+def get_accessories_rate():
+    """Récupère le taux d'accessoires depuis Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            doc = db.collection('config').document('accessories_rate').get()
+            if doc.exists:
+                return doc.to_dict()
+    except Exception as e:
+        st.error(f"Erreur récupération taux accessoires: {e}")
+    return None
+
+def clear_accessories_rate_cache():
+    """Vide le cache du taux d'accessoires"""
+    get_accessories_rate.clear()
+
+def initialize_accessories_rate_in_firebase(rate_data):
+    """Initialise le taux d'accessoires dans Firebase (première fois)"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            # Vérifier si le taux existe déjà
+            doc = db.collection('config').document('accessories_rate').get()
+            if not doc.exists:
+                # Ajouter timestamp d'initialisation
+                rate_data['_initialized_at'] = firestore.SERVER_TIMESTAMP
+                rate_data['_version'] = '1.0'
+                db.collection('config').document('accessories_rate').set(rate_data)
+                return True, "Accessories rate initialized successfully"
+            else:
+                return False, "Accessories rate already exists in database"
+    except Exception as e:
+        st.error(f"Erreur initialisation taux accessoires: {e}")
+        return False, f"Error: {e}"
+
+def initialize_labor_percentages_in_firebase(percentages_data):
+    """Initialise les pourcentages de main d'œuvre dans Firebase (première fois)"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            # Vérifier si les pourcentages existent déjà
+            doc = db.collection('config').document('labor_percentages').get()
+            if not doc.exists:
+                # Ajouter timestamp d'initialisation
+                percentages_data['_initialized_at'] = firestore.SERVER_TIMESTAMP
+                percentages_data['_version'] = '1.0'
+                db.collection('config').document('labor_percentages').set(percentages_data)
+                return True, "Labor percentages initialized successfully"
+            else:
+                return False, "Labor percentages already exist in database"
+    except Exception as e:
+        st.error(f"Erreur initialisation pourcentages main d'œuvre: {e}")
+        return False, f"Error: {e}"
