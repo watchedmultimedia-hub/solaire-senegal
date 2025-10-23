@@ -10,7 +10,9 @@ from firebase_config import (
     save_quote_to_firebase, get_all_quotes, save_equipment_prices, get_equipment_prices,
     save_client_request, get_all_client_requests, update_client_request_status, initialize_equipment_prices_in_firebase,
     delete_quote, delete_client_request,
-    is_admin_email
+    is_admin_email, save_labor_percentages, get_labor_percentages, initialize_labor_percentages_in_firebase,
+    clear_labor_percentages_cache, save_accessories_rate, get_accessories_rate, clear_accessories_rate_cache,
+    initialize_accessories_rate_in_firebase
 )
 
 # Fonction pour obtenir les prix actuels (Firebase ou par défaut)
@@ -122,12 +124,7 @@ PRIX_EQUIPEMENTS = {
     }
 }
 
-PRIX_INSTALLATION = {
-    "petit": 50000,  # < 1kW
-    "moyen": 100000,  # 1-3kW
-    "grand": 200000,  # 3-10kW
-    "tres_grand": 400000,  # > 10kW
-}
+
 
 # Informations sur les types de batteries
 INFO_BATTERIES = {
@@ -152,6 +149,45 @@ INFO_BATTERIES = {
         "usage": "Meilleur investissement long terme, installations modernes"
     }
 }
+
+# Régions du Sénégal pour la sélection de main d'œuvre
+REGIONS_SENEGAL = [
+    "Dakar",
+    "Thiès", 
+    "Saint-Louis",
+    "Diourbel",
+    "Louga",
+    "Fatick",
+    "Kaolack",
+    "Kaffrine",
+    "Tambacounda",
+    "Kédougou",
+    "Kolda",
+    "Ziguinchor",
+    "Sédhiou",
+    "Matam"
+]
+
+# Pourcentages de main d'œuvre par défaut par région (en % du coût total des équipements)
+POURCENTAGES_MAIN_OEUVRE_DEFAUT = {
+    "Dakar": 15.0,
+    "Thiès": 18.0,
+    "Saint-Louis": 20.0,
+    "Diourbel": 22.0,
+    "Louga": 25.0,
+    "Fatick": 25.0,
+    "Kaolack": 20.0,
+    "Kaffrine": 25.0,
+    "Tambacounda": 30.0,
+    "Kédougou": 35.0,
+    "Kolda": 30.0,
+    "Ziguinchor": 25.0,
+    "Sédhiou": 30.0,
+    "Matam": 30.0
+}
+
+# Taux accessoires par défaut (en %)
+TAUX_ACCESSOIRES_DEFAUT = 15.0
 
 # Catalogue d'appareils par familles (puissances typiques)
 APPAREILS_FAMILLES = {
@@ -542,7 +578,7 @@ def estimer_kwh_depuis_facture(montant_fcfa: float, type_compteur: str = "mensue
         return p1_kwh + p2_kwh + (m - cout_p1 - cout_p2) / 159.36
 
 # Fonction pour calculer le devis
-def calculer_devis(equipements, use_online=False, accessoires_rate=0.15):
+def calculer_devis(equipements, use_online=False, accessoires_rate=0.15, region_selectionnee=None):
     # Obtenir les prix actuels (Firebase ou par défaut)
     prix_equipements = get_current_prices()
     
@@ -665,23 +701,46 @@ def calculer_devis(equipements, use_online=False, accessoires_rate=0.15):
         "url_source": None
     })
     
-    # Installation
+    # Calcul de la puissance totale
     puissance_totale = 0
     if panneau_nom:
         puissance_totale = nb_panneaux * prix_equipements["panneaux"][panneau_nom]["puissance"] / 1000
     
-    # Installation (forfait fixe demandé)
-    installation = 200000
-    
-    total += installation
-    details.append({
-        "item": "Installation et mise en service",
-        "quantite": 1,
-        "prix_unitaire": installation,
-        "sous_total": installation,
-        "source_prix": "forfait",
-        "url_source": None
-    })
+    # Calcul de l'installation et mise en service selon la région
+    if region_selectionnee:
+        # Récupérer les pourcentages depuis Firebase ou utiliser les valeurs par défaut
+        pourcentages_firebase = get_labor_percentages()
+        if pourcentages_firebase and region_selectionnee in pourcentages_firebase:
+            pourcentage_main_oeuvre = pourcentages_firebase[region_selectionnee]
+        elif region_selectionnee in POURCENTAGES_MAIN_OEUVRE_DEFAUT:
+            pourcentage_main_oeuvre = POURCENTAGES_MAIN_OEUVRE_DEFAUT[region_selectionnee]
+        else:
+            pourcentage_main_oeuvre = 20.0  # Valeur par défaut si région non trouvée
+        
+        # Calculer l'installation et mise en service en pourcentage du coût des équipements
+        cout_installation = total * (pourcentage_main_oeuvre / 100.0)
+        
+        total += cout_installation
+        details.append({
+            "item": f"Installation et mise en service - {region_selectionnee}",
+            "quantite": 1,
+            "prix_unitaire": cout_installation,
+            "sous_total": cout_installation,
+            "source_prix": "pourcentage régional",
+            "url_source": None
+        })
+    else:
+        # Si aucune région n'est sélectionnée, utiliser un forfait par défaut
+        installation_defaut = 200000
+        total += installation_defaut
+        details.append({
+            "item": "Installation et mise en service",
+            "quantite": 1,
+            "prix_unitaire": installation_defaut,
+            "sous_total": installation_defaut,
+            "source_prix": "forfait",
+            "url_source": None
+        })
     
     return {"details": details, "total": total, "puissance_totale": puissance_totale}
 
@@ -1209,8 +1268,22 @@ with tab2:
         st.warning("⚠️ Veuillez d'abord effectuer un dimensionnement dans l'onglet 'Dimensionnement'")
     else:
         st.markdown("### ⚙️ Options du devis")
-        accessoires_pct = st.slider("Taux accessoires (%)", 5, 20, 15, step=1, help="Inclut câbles, connecteurs, protections, etc. (hors supports)", key="accessoires_pct_devis")
-        devis = calculer_devis(st.session_state.equipements, use_online=False, accessoires_rate=accessoires_pct/100.0)
+        
+        # Sélection de la région pour le calcul de la main d'œuvre
+        region_selectionnee = st.selectbox(
+            "🌍 Région d'installation",
+            options=REGIONS_SENEGAL,
+            index=0,
+            help="Sélectionnez la région où sera installé le système solaire. Le pourcentage de main d'œuvre sera appliqué automatiquement."
+        )
+        
+        # Récupération du taux accessoires depuis les paramètres admin
+        taux_accessoires_admin = get_accessories_rate()
+        if taux_accessoires_admin is None:
+            initialize_accessories_rate_in_firebase({'rate': TAUX_ACCESSOIRES_DEFAUT})
+            taux_accessoires_admin = TAUX_ACCESSOIRES_DEFAUT
+        
+        devis = calculer_devis(st.session_state.equipements, use_online=False, accessoires_rate=taux_accessoires_admin/100.0, region_selectionnee=region_selectionnee)
         
         # Résumé du système
         st.markdown("### 📋 Résumé de votre installation")
@@ -1689,8 +1762,14 @@ L'utilisateur a dimensionné une installation avec:
 - Climat: Sénégal (chaleur, humidité, 5h ensoleillement moyen)
 """
         
-        st.subheader("🎛️ Options d’équipements avec totaux")
-        options_accessoires_pct = st.slider("Taux accessoires (%)", 5, 20, 15, step=1, help="Inclut câbles, connecteurs, protections, etc. (hors supports)", key="accessoires_pct_options")
+        st.subheader("🎛️ Options d'équipements avec totaux")
+        
+        # Récupération du taux accessoires depuis les paramètres admin
+        options_accessoires_pct = get_accessories_rate()
+        if options_accessoires_pct is None:
+            initialize_accessories_rate_in_firebase({'rate': TAUX_ACCESSOIRES_DEFAUT})
+            options_accessoires_pct = TAUX_ACCESSOIRES_DEFAUT
+        
         base_voltage = st.session_state.choix['voltage'] if 'choix' in st.session_state else 48
 
         options_spec = [
@@ -1852,7 +1931,7 @@ if is_user_authenticated() and is_admin_user():
         st.header("⚙️ Panneau d'Administration")
         
         # Sous-onglets admin
-        admin_tab1, admin_tab2, admin_tab3 = st.tabs(["💰 Gestion des Prix", "📋 Devis Clients", "📞 Demandes Clients"])
+        admin_tab1, admin_tab2, admin_tab3, admin_tab4 = st.tabs(["💰 Gestion des Prix", "🔧 Main d'œuvre", "📋 Devis Clients", "📞 Demandes Clients"])
         
         with admin_tab1:
             st.subheader("💰 Gestion des Prix des Équipements")
@@ -2008,101 +2087,503 @@ if is_user_authenticated() and is_admin_user():
                     st.error("❌ Erreur lors de la réinitialisation")
         
         with admin_tab2:
+            st.markdown("### 🔧 Configuration des pourcentages de main d'œuvre par région")
+            st.markdown("Configurez les pourcentages de main d'œuvre appliqués selon les régions du Sénégal.")
+            
+            # Récupérer les pourcentages actuels depuis Firebase
+            try:
+                pourcentages_actuels = get_labor_percentages()
+                if not pourcentages_actuels:
+                    # Initialiser avec les valeurs par défaut si aucune donnée n'existe
+                    success, message = initialize_labor_percentages_in_firebase(POURCENTAGES_MAIN_OEUVRE_DEFAUT.copy())
+                    if success:
+                        pourcentages_actuels = POURCENTAGES_MAIN_OEUVRE_DEFAUT.copy()
+                        st.info("✅ Pourcentages initialisés avec les valeurs par défaut")
+                    else:
+                        st.warning(f"⚠️ {message}")
+                        pourcentages_actuels = POURCENTAGES_MAIN_OEUVRE_DEFAUT.copy()
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la récupération des données: {str(e)}")
+                pourcentages_actuels = POURCENTAGES_MAIN_OEUVRE_DEFAUT.copy()
+            
+            # Interface de modification
+            st.markdown("#### 📊 Pourcentages actuels")
+            
+            # Créer un formulaire pour modifier les pourcentages
+            with st.form("labor_percentages_form"):
+                st.markdown("**Modifiez les pourcentages de main d'œuvre par région :**")
+                
+                # Créer des colonnes pour une meilleure présentation
+                col1, col2 = st.columns(2)
+                
+                nouveaux_pourcentages = {}
+                regions_list = list(REGIONS_SENEGAL)
+                
+                # Diviser les régions en deux colonnes
+                mid_point = len(regions_list) // 2
+                
+                with col1:
+                    for region in regions_list[:mid_point]:
+                        valeur_actuelle = pourcentages_actuels.get(region, POURCENTAGES_MAIN_OEUVRE_DEFAUT.get(region, 20.0))
+                        nouveaux_pourcentages[region] = st.number_input(
+                            f"🏛️ {region}",
+                            min_value=0.0,
+                            max_value=50.0,
+                            value=float(valeur_actuelle),
+                            step=0.5,
+                            format="%.1f",
+                            help=f"Pourcentage de main d'œuvre pour {region}"
+                        )
+                
+                with col2:
+                    for region in regions_list[mid_point:]:
+                        valeur_actuelle = pourcentages_actuels.get(region, POURCENTAGES_MAIN_OEUVRE_DEFAUT.get(region, 20.0))
+                        nouveaux_pourcentages[region] = st.number_input(
+                            f"🏛️ {region}",
+                            min_value=0.0,
+                            max_value=50.0,
+                            value=float(valeur_actuelle),
+                            step=0.5,
+                            format="%.1f",
+                            help=f"Pourcentage de main d'œuvre pour {region}"
+                        )
+                
+                # Boutons d'action
+                col_btn1, col_btn2, col_btn3 = st.columns(3)
+                
+                with col_btn1:
+                    submit_button = st.form_submit_button("💾 Sauvegarder", type="primary")
+                
+                with col_btn2:
+                    reset_button = st.form_submit_button("🔄 Réinitialiser")
+                
+                with col_btn3:
+                    preview_button = st.form_submit_button("👁️ Aperçu")
+                
+                # Traitement des actions
+                if submit_button:
+                    try:
+                        if save_labor_percentages(nouveaux_pourcentages):
+                            clear_labor_percentages_cache()  # Vider le cache pour afficher les nouvelles données
+                            st.success("✅ Pourcentages sauvegardés avec succès!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Erreur lors de la sauvegarde")
+                    except Exception as e:
+                        st.error(f"❌ Erreur: {str(e)}")
+                
+                if reset_button:
+                    try:
+                        if save_labor_percentages(POURCENTAGES_MAIN_OEUVRE_DEFAUT):
+                            clear_labor_percentages_cache()  # Vider le cache pour afficher les nouvelles données
+                            st.success("✅ Pourcentages réinitialisés aux valeurs par défaut!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Erreur lors de la réinitialisation")
+                    except Exception as e:
+                        st.error(f"❌ Erreur: {str(e)}")
+                
+                if preview_button:
+                    st.markdown("#### 👁️ Aperçu des modifications")
+                    
+                    # Afficher les changements
+                    col_prev1, col_prev2 = st.columns(2)
+                    
+                    with col_prev1:
+                        st.markdown("**Valeurs actuelles:**")
+                        for region in REGIONS_SENEGAL:
+                            valeur_actuelle = pourcentages_actuels.get(region, POURCENTAGES_MAIN_OEUVRE_DEFAUT.get(region, 20.0))
+                            st.write(f"• {region}: {valeur_actuelle:.1f}%")
+                    
+                    with col_prev2:
+                        st.markdown("**Nouvelles valeurs:**")
+                        for region in REGIONS_SENEGAL:
+                            nouvelle_valeur = nouveaux_pourcentages.get(region, 20.0)
+                            valeur_actuelle = pourcentages_actuels.get(region, POURCENTAGES_MAIN_OEUVRE_DEFAUT.get(region, 20.0))
+                            
+                            if nouvelle_valeur != valeur_actuelle:
+                                st.write(f"• {region}: {nouvelle_valeur:.1f}% ⚠️")
+                            else:
+                                st.write(f"• {region}: {nouvelle_valeur:.1f}%")
+            
+            # Statistiques et informations
+            st.markdown("---")
+            st.markdown("#### 📈 Statistiques")
+            
+            col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+            
+            valeurs_actuelles = list(pourcentages_actuels.values())
+            
+            with col_stat1:
+                st.metric("Minimum", f"{min(valeurs_actuelles):.1f}%")
+            with col_stat2:
+                st.metric("Maximum", f"{max(valeurs_actuelles):.1f}%")
+            with col_stat3:
+                st.metric("Moyenne", f"{sum(valeurs_actuelles)/len(valeurs_actuelles):.1f}%")
+            with col_stat4:
+                st.metric("Régions", len(REGIONS_SENEGAL))
+            
+            # Aide et informations
+            st.markdown("---")
+            st.markdown("#### ℹ️ Aide")
+            
+            st.info("""
+            **Comment utiliser cette interface :**
+
+            1. **Modifier les pourcentages** : Ajustez les valeurs selon les coûts de main d'œuvre locaux
+            2. **Sauvegarder** : Cliquez sur "Sauvegarder" pour appliquer les changements
+            3. **Réinitialiser** : Restaure les valeurs par défaut du système
+            4. **Aperçu** : Visualisez les changements avant de les sauvegarder
+
+            **Notes importantes :**
+            - Les pourcentages s'appliquent au coût total des équipements
+            - Les valeurs sont comprises entre 0% et 50%
+            - Les modifications sont appliquées immédiatement aux nouveaux devis
+            """)
+            
+            # Section Taux accessoires
+            st.markdown("---")
+            st.markdown("### 🔧 Configuration du taux accessoires")
+            st.markdown("Configurez le taux accessoires appliqué aux devis (câbles, fusibles, disjoncteurs, etc.).")
+            
+            # Récupérer le taux actuel depuis Firebase
+            try:
+                taux_actuel = get_accessories_rate()
+                if taux_actuel is None:
+                    # Initialiser avec la valeur par défaut si aucune donnée n'existe
+                    success, message = initialize_accessories_rate_in_firebase(TAUX_ACCESSOIRES_DEFAUT)
+                    if success:
+                        taux_actuel = TAUX_ACCESSOIRES_DEFAUT
+                        st.info("✅ Taux accessoires initialisé avec la valeur par défaut")
+                    else:
+                        st.warning(f"⚠️ {message}")
+                        taux_actuel = TAUX_ACCESSOIRES_DEFAUT
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la récupération du taux accessoires: {str(e)}")
+                taux_actuel = TAUX_ACCESSOIRES_DEFAUT
+            
+            # Interface de modification
+            with st.form("accessories_rate_form"):
+                st.markdown("**Configurez le taux accessoires :**")
+                
+                nouveau_taux = st.number_input(
+                    "🔌 Taux accessoires (%)",
+                    min_value=0.0,
+                    max_value=50.0,
+                    value=float(taux_actuel),
+                    step=0.5,
+                    format="%.1f",
+                    help="Pourcentage appliqué au coût total des équipements pour les accessoires (câbles, fusibles, disjoncteurs, etc.)"
+                )
+                
+                # Boutons d'action
+                col_btn1, col_btn2 = st.columns(2)
+                
+                with col_btn1:
+                    submit_button = st.form_submit_button("💾 Sauvegarder", type="primary")
+                
+                with col_btn2:
+                    reset_button = st.form_submit_button("🔄 Réinitialiser")
+                
+                # Traitement des actions
+                if submit_button:
+                    try:
+                        if save_accessories_rate(nouveau_taux):
+                            clear_accessories_rate_cache()  # Vider le cache pour afficher les nouvelles données
+                            st.success("✅ Taux accessoires sauvegardé avec succès!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Erreur lors de la sauvegarde")
+                    except Exception as e:
+                        st.error(f"❌ Erreur: {str(e)}")
+                
+                if reset_button:
+                    try:
+                        if save_accessories_rate(TAUX_ACCESSOIRES_DEFAUT):
+                            clear_accessories_rate_cache()  # Vider le cache pour afficher les nouvelles données
+                            st.success("✅ Taux accessoires réinitialisé à la valeur par défaut!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Erreur lors de la réinitialisation")
+                    except Exception as e:
+                        st.error(f"❌ Erreur: {str(e)}")
+            
+            # Informations sur le taux actuel
+            st.markdown("#### 📊 Taux actuel")
+            col_info1, col_info2 = st.columns(2)
+            
+            with col_info1:
+                st.metric("Taux accessoires", f"{taux_actuel:.1f}%")
+            
+            with col_info2:
+                st.metric("Valeur par défaut", f"{TAUX_ACCESSOIRES_DEFAUT:.1f}%")
+            
+            # Aide pour le taux accessoires
+            st.markdown("---")
+            st.markdown("#### ℹ️ À propos du taux accessoires")
+            
+            st.info("""
+            **Le taux accessoires inclut :**
+            - Câbles et connecteurs
+            - Fusibles et disjoncteurs
+            - Supports et fixations
+            - Petits accessoires d'installation
+            
+            **Notes importantes :**
+            - Ce taux s'applique au coût total des équipements principaux
+            - Il remplace l'ancien choix client pour une gestion centralisée
+            - Les modifications sont appliquées immédiatement aux nouveaux devis
+            """)
+        
+        with admin_tab3:
             st.subheader("📋 Devis Partagés par les Clients")
             
             # Charger tous les devis depuis Firebase
-            quotes = get_all_quotes()
+            all_quotes = get_all_quotes()
             
-            if quotes:
-                st.success(f"✅ {len(quotes)} devis trouvé(s)")
+            if all_quotes:
+                st.success(f"✅ {len(all_quotes)} devis trouvé(s)")
+                
+                # Statistiques rapides
+                col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+                
+                # Calculer les statistiques
+                total_value = sum([quote.get('total', 0) for quote in all_quotes])
+                avg_value = total_value / len(all_quotes) if all_quotes else 0
+                
+                # Compter par type de batterie
+                battery_types = {}
+                for quote in all_quotes:
+                    battery_type = quote.get('type_batterie', 'N/A')
+                    battery_types[battery_type] = battery_types.get(battery_type, 0) + 1
+                
+                with col_stat1:
+                    st.metric("📊 Total devis", len(all_quotes))
+                with col_stat2:
+                    st.metric("💰 Valeur totale", f"{total_value:,.0f} FCFA")
+                with col_stat3:
+                    st.metric("📈 Valeur moyenne", f"{avg_value:,.0f} FCFA")
+                with col_stat4:
+                    most_popular_battery = max(battery_types.items(), key=lambda x: x[1])[0] if battery_types else "N/A"
+                    st.metric("🔋 Batterie populaire", most_popular_battery)
                 
                 # Filtres
-                col_filter1, col_filter2 = st.columns(2)
+                st.markdown("### 🔍 Filtres")
+                col_filter1, col_filter2, col_filter3 = st.columns(3)
+                
                 with col_filter1:
-                    filter_voltage = st.selectbox("Filtrer par voltage", ["Tous", "12V", "24V", "48V"])
+                    # Filtre par type de batterie
+                    battery_options = ["Tous"] + list(set([quote.get('type_batterie', 'N/A') for quote in all_quotes]))
+                    filter_battery = st.selectbox("Type de batterie", battery_options)
+                
                 with col_filter2:
-                    filter_battery = st.selectbox("Filtrer par batterie", ["Tous", "Lithium", "Plomb"])
+                    # Filtre par plage de prix
+                    filter_price = st.selectbox("Plage de prix", [
+                        "Tous",
+                        "< 500k FCFA",
+                        "500k - 1M FCFA", 
+                        "1M - 2M FCFA",
+                        "2M - 5M FCFA",
+                        "> 5M FCFA"
+                    ])
+                
+                with col_filter3:
+                    # Filtre par puissance
+                    filter_power = st.selectbox("Puissance", [
+                        "Tous",
+                        "< 1 kWc",
+                        "1-3 kWc",
+                        "3-5 kWc", 
+                        "5-10 kWc",
+                        "> 10 kWc"
+                    ])
                 
                 # Appliquer les filtres
-                filtered_quotes = quotes
-                if filter_voltage != "Tous":
-                    filtered_quotes = [q for q in filtered_quotes if str(q.get('voltage_systeme', '')) + 'V' == filter_voltage]
+                filtered_quotes = all_quotes
+                
                 if filter_battery != "Tous":
-                    filtered_quotes = [q for q in filtered_quotes if q.get('type_batterie', '') == filter_battery]
+                    filtered_quotes = [q for q in filtered_quotes if q.get('type_batterie') == filter_battery]
+                
+                if filter_price != "Tous":
+                    if filter_price == "< 500k FCFA":
+                        filtered_quotes = [q for q in filtered_quotes if q.get('total', 0) < 500000]
+                    elif filter_price == "500k - 1M FCFA":
+                        filtered_quotes = [q for q in filtered_quotes if 500000 <= q.get('total', 0) < 1000000]
+                    elif filter_price == "1M - 2M FCFA":
+                        filtered_quotes = [q for q in filtered_quotes if 1000000 <= q.get('total', 0) < 2000000]
+                    elif filter_price == "2M - 5M FCFA":
+                        filtered_quotes = [q for q in filtered_quotes if 2000000 <= q.get('total', 0) < 5000000]
+                    elif filter_price == "> 5M FCFA":
+                        filtered_quotes = [q for q in filtered_quotes if q.get('total', 0) >= 5000000]
+                
+                if filter_power != "Tous":
+                    if filter_power == "< 1 kWc":
+                        filtered_quotes = [q for q in filtered_quotes if q.get('puissance_totale', 0) < 1]
+                    elif filter_power == "1-3 kWc":
+                        filtered_quotes = [q for q in filtered_quotes if 1 <= q.get('puissance_totale', 0) < 3]
+                    elif filter_power == "3-5 kWc":
+                        filtered_quotes = [q for q in filtered_quotes if 3 <= q.get('puissance_totale', 0) < 5]
+                    elif filter_power == "5-10 kWc":
+                        filtered_quotes = [q for q in filtered_quotes if 5 <= q.get('puissance_totale', 0) < 10]
+                    elif filter_power == "> 10 kWc":
+                        filtered_quotes = [q for q in filtered_quotes if q.get('puissance_totale', 0) >= 10]
                 
                 st.info(f"📊 {len(filtered_quotes)} devis après filtrage")
                 
+                # Trier par date (plus récent en premier)
+                filtered_quotes.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+                
                 # Afficher les devis
                 for i, quote in enumerate(filtered_quotes):
-                    ci_header = quote.get('contact_info', {})
-                    _nom_client = ci_header.get('name', '') or 'Client'
-                    _ville_client = ci_header.get('ville', '')
-                    _titre_devis = f"Devis #{i+1} - {quote.get('timestamp', 'Date inconnue')[:10]} - {quote.get('prix_total_fcfa', 0):,} FCFA - {_nom_client}" + (f" - {_ville_client}" if _ville_client else "")
-                    with st.expander(_titre_devis):
-                        col_info1, col_info2, col_info3 = st.columns(3)
+                    # Informations de base
+                    timestamp = quote.get('timestamp', '')[:16].replace('T', ' ')
+                    client_name = quote.get('nom_client', 'Client anonyme')
+                    total_price = quote.get('total', 0)
+                    power = quote.get('puissance_totale', 0)
+                    
+                    # Titre de l'expandeur
+                    title = f"💰 {client_name} - {total_price:,} FCFA - {power:.1f} kWc - {timestamp}"
+                    
+                    with st.expander(title):
+                        # Informations système
+                        col_sys1, col_sys2, col_sys3 = st.columns(3)
                         
-                        with col_info1:
-                            st.metric("Consommation", f"{quote.get('consommation_kwh_jour', 0):.1f} kWh/jour")
-                            st.metric("Voltage", f"{quote.get('voltage_systeme', 'N/A')}V")
+                        with col_sys1:
+                            st.markdown("**⚡ Système**")
+                            st.write(f"**Puissance:** {quote.get('puissance_totale', 0):.2f} kWc")
+                            st.write(f"**Consommation:** {quote.get('consommation', 0):.1f} kWh/jour")
+                            st.write(f"**Autonomie:** {quote.get('autonomie_pct', 100)}%")
+                            st.write(f"**Voltage:** {quote.get('voltage', 'N/A')}V")
                         
-                        with col_info2:
-                            st.metric("Puissance", f"{quote.get('puissance_totale_kwc', 0):.2f} kWc")
-                            st.metric("Batterie", quote.get('type_batterie', 'N/A'))
+                        with col_sys2:
+                            st.markdown("**🔋 Équipements**")
+                            st.write(f"**Batterie:** {quote.get('type_batterie', 'N/A')}")
+                            st.write(f"**Onduleur:** {quote.get('type_onduleur', 'N/A')}")
+                            st.write(f"**Région:** {quote.get('region', 'Non spécifiée')}")
                         
-                        with col_info3:
-                            st.metric("Prix total", f"{quote.get('prix_total_fcfa', 0):,} FCFA")
-                            st.metric("ROI", f"{quote.get('retour_investissement_ans', 0):.1f} ans")
+                        with col_sys3:
+                            st.markdown("**👤 Client**")
+                            st.write(f"**Nom:** {quote.get('nom_client', 'N/A')}")
+                            st.write(f"**Email:** {quote.get('email_client', 'N/A')}")
+                            st.write(f"**Téléphone:** {quote.get('telephone', 'N/A')}")
+                            st.write(f"**Ville:** {quote.get('ville', 'N/A')}")
                         
                         # Détails des équipements
-                        if 'details_equipements' in quote:
-                            st.markdown("**Détails des équipements:**")
-                            details_df = pd.DataFrame(quote['details_equipements'])
-                            st.dataframe(details_df, use_container_width=True)
+                        if quote.get('details'):
+                            st.markdown("---")
+                            st.markdown("**📦 Détails des équipements**")
+                            
+                            # Tableau des équipements
+                            col_eq1, col_eq2, col_eq3, col_eq4 = st.columns([3, 1, 2, 2])
+                            
+                            with col_eq1:
+                                st.markdown("**Équipement**")
+                            with col_eq2:
+                                st.markdown("**Qté**")
+                            with col_eq3:
+                                st.markdown("**Prix unitaire**")
+                            with col_eq4:
+                                st.markdown("**Sous-total**")
+                            
+                            st.markdown("---")
+                            
+                            for detail in quote.get('details', []):
+                                col_eq1, col_eq2, col_eq3, col_eq4 = st.columns([3, 1, 2, 2])
+                                
+                                with col_eq1:
+                                    st.write(detail.get('item', 'N/A'))
+                                with col_eq2:
+                                    st.write(f"x{detail.get('quantite', 0)}")
+                                with col_eq3:
+                                    st.write(f"{detail.get('prix_unitaire', 0):,} FCFA")
+                                with col_eq4:
+                                    st.write(f"**{detail.get('sous_total', 0):,} FCFA**")
                         
-                        # Informations de contact
-                        st.markdown("**Informations:**")
-                        st.write(f"- Autonomie souhaitée: {quote.get('autonomie_souhaitee_pct', 'N/A')}%")
-                        st.write(f"- Autonomie réelle: {quote.get('autonomie_reelle_pct', 'N/A')}%")
-                        st.write(f"- Économie mensuelle: {quote.get('economie_mensuelle_fcfa', 0):,} FCFA")
-                        ci = quote.get('contact_info', {})
-                        st.markdown("**Contact client:**")
-                        st.write(f"- Nom: {ci.get('name', 'N/A')}")
-                        st.write(f"- Téléphone: {ci.get('phone', 'N/A')}")
-                        st.write(f"- Email: {ci.get('email', 'N/A')}")
-                        st.write(f"- Ville: {ci.get('ville', 'N/A')}")
-                        st.write(f"- Quartier: {ci.get('quartier', 'N/A')}")
-                        st.write(f"- Type de bâtiment: {ci.get('type_batiment', 'N/A')}")
-                        st.write(f"- Urgence: {ci.get('urgence', 'N/A')}")
-                        st.write(f"- Budget estimé: {ci.get('budget_estime', 'N/A')}")
-                        st.write(f"- Installation existante: {ci.get('installation_existante', 'N/A')}")
-                        st.write(f"- Visite technique: {'Oui' if ci.get('visite_technique', False) else 'Non'}")
-                        st.write(f"- Commentaires: {ci.get('commentaires', 'N/A')}")
-                        st.write(f"- Source: {ci.get('source', 'N/A')}")
-                        st.write(f"- Contact autorisé: {'Oui' if ci.get('demande_contact', False) else 'Non'}")
-
-                        # Actions Admin pour ce devis
+                        # Actions admin
                         st.markdown("---")
                         st.markdown("**⚙️ Actions Admin**")
-                        _confirm_del_q = st.checkbox(
-                            "Confirmer la suppression de ce devis",
-                            key=f"confirm_del_quote_{quote.get('id','')}"
-                        )
-                        if st.button(
-                            "🗑️ Supprimer ce devis",
-                            key=f"btn_del_quote_{quote.get('id','')}"
-                        ):
-                            if _confirm_del_q:
-                                if delete_quote(quote.get('id')):
-                                    st.success("✅ Devis supprimé.")
-                                    st.rerun()
+                        
+                        col_action1, col_action2, col_action3 = st.columns(3)
+                        
+                        with col_action1:
+                            # Lien pour contacter le client
+                            email = quote.get('email_client', '')
+                            if email:
+                                subject = f"Votre devis solaire - {quote.get('nom_client', '')}"
+                                st.markdown(f"📧 [Contacter par email](mailto:{email}?subject={subject})")
+                        
+                        with col_action2:
+                            # Lien pour appeler
+                            phone = quote.get('telephone', '').replace(' ', '').replace('+', '')
+                            if phone:
+                                st.markdown(f"📞 [Appeler le client](tel:{phone})")
+                        
+                        with col_action3:
+                            # Bouton de suppression
+                            _confirm_del_q = st.checkbox(
+                                "Confirmer suppression",
+                                key=f"confirm_del_quote_{quote.get('id','')}"
+                            )
+                            if st.button("🗑️ Supprimer", key=f"btn_del_quote_{quote.get('id','')}"):
+                                if _confirm_del_q:
+                                    if delete_quote(quote.get('id')):
+                                        st.success("✅ Devis supprimé.")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Échec de suppression du devis.")
                                 else:
-                                    st.error("❌ Échec de suppression du devis.")
-                            else:
-                                st.warning("Veuillez cocher la confirmation avant suppression.")
+                                    st.warning("Veuillez cocher la confirmation avant suppression.")
+                        
+                        # Informations système
+                        st.markdown("---")
+                        st.caption(f"**ID:** {quote.get('id', 'N/A')[:8]}... | **Créé:** {timestamp}")
+                
+                # Actions en lot
+                st.markdown("---")
+                st.markdown("### 🔧 Actions en lot")
+                col_bulk1, col_bulk2 = st.columns(2)
+                
+                with col_bulk1:
+                    if st.button("📊 Exporter en CSV"):
+                        # Préparer les données pour export
+                        export_data = []
+                        for quote in filtered_quotes:
+                            export_data.append({
+                                'Date': quote.get('timestamp', '')[:10],
+                                'Nom_Client': quote.get('nom_client', ''),
+                                'Email': quote.get('email_client', ''),
+                                'Telephone': quote.get('telephone', ''),
+                                'Ville': quote.get('ville', ''),
+                                'Region': quote.get('region', ''),
+                                'Puissance_kWc': quote.get('puissance_totale', 0),
+                                'Consommation_kWh': quote.get('consommation', 0),
+                                'Type_Batterie': quote.get('type_batterie', ''),
+                                'Type_Onduleur': quote.get('type_onduleur', ''),
+                                'Voltage': quote.get('voltage', ''),
+                                'Autonomie_Pct': quote.get('autonomie_pct', 100),
+                                'Prix_Total_FCFA': quote.get('total', 0)
+                            })
+                        
+                        if export_data:
+                            df_export = pd.DataFrame(export_data)
+                            csv = df_export.to_csv(index=False)
+                            st.download_button(
+                                label="💾 Télécharger CSV",
+                                data=csv,
+                                file_name=f"devis_clients_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                                mime="text/csv"
+                            )
+                
+                with col_bulk2:
+                    if st.button("🔄 Actualiser"):
+                        st.rerun()
+            
             else:
                 st.info("📭 Aucun devis partagé pour le moment")
+                st.markdown("Les devis apparaîtront ici quand les clients sauvegarderont leurs devis dans l'onglet Devis Estimatif Détaillé.")
         
-        with admin_tab3:
+        # Onglet 4: Gestion des demandes clients
+        with admin_tab4:
             st.subheader("📞 Gestion des Demandes Clients")
             
             # Charger toutes les demandes depuis Firebase
@@ -2156,124 +2637,113 @@ if is_user_authenticated() and is_admin_user():
                 
                 # Afficher les demandes
                 for i, request in enumerate(filtered_requests):
-                    # Couleur selon le statut
-                    status = request.get('status', 'nouveau')
-                    if status == 'nouveau':
-                        status_color = "🆕"
-                        status_text = "Nouveau"
-                    elif status == 'en_cours':
-                        status_color = "📞"
-                        status_text = "En cours"
+                    _nom_client = request.get('nom_client', '') or 'Client'
+                    _ville_client = request.get('ville', '')
+                    _urgence = request.get('urgence', 'Normal')
+                    _status = request.get('status', 'nouveau')
+                    
+                    # Icônes selon le statut
+                    if _status == "nouveau":
+                        status_icon = "🆕"
+                    elif _status == "en_cours":
+                        status_icon = "📞"
                     else:
-                        status_color = "✅"
-                        status_text = "Traité"
+                        status_icon = "✅"
                     
-                    # Urgence
-                    urgence = request.get('urgence', '')
-                    urgence_icon = "🔴" if "Urgent" in urgence else "🟡" if "Court terme" in urgence else "🟢"
+                    # Couleur selon l'urgence
+                    if "Urgent (" in _urgence:
+                        urgence_color = "🔴"
+                    elif "Court terme" in _urgence:
+                        urgence_color = "🟠"
+                    elif "Moyen terme" in _urgence:
+                        urgence_color = "🟡"
+                    else:
+                        urgence_color = "🟢"
                     
-                    # Titre de l'expandeur
-                    timestamp = request.get('timestamp', '')[:16].replace('T', ' ')
-                    title = f"{status_color} {request.get('nom_client', 'Client')} - {request.get('ville', '')} - {timestamp} {urgence_icon}"
+                    timestamp = request.get('timestamp', 'Date inconnue')[:16].replace('T', ' ')
+                    _titre_demande = f"{status_icon} Demande #{i+1} - {timestamp} - {_nom_client}" + (f" - {_ville_client}" if _ville_client else "")
                     
-                    with st.expander(title, expanded=(status == 'nouveau')):
-                        # Informations client
-                        col_client1, col_client2, col_client3 = st.columns(3)
+                    with st.expander(f"{urgence_color} {_titre_demande}"):
+                        # Informations principales
+                        col_info1, col_info2, col_info3 = st.columns(3)
                         
-                        with col_client1:
-                            st.markdown("**👤 Informations Client**")
-                            st.write(f"**Nom:** {request.get('nom_client', 'N/A')}")
-                            st.write(f"**Téléphone:** {request.get('telephone', 'N/A')}")
-                            st.write(f"**Email:** {request.get('email_client', 'Non fourni')}")
-                            st.write(f"**Ville:** {request.get('ville', 'N/A')}")
-                            st.write(f"**Quartier:** {request.get('quartier', 'Non précisé')}")
+                        with col_info1:
+                            st.markdown("**👤 Contact**")
+                            st.write(f"Nom: {request.get('nom_client', 'N/A')}")
+                            st.write(f"Téléphone: {request.get('telephone', 'N/A')}")
+                            st.write(f"Email: {request.get('email_client', 'N/A')}")
+                            st.write(f"Ville: {request.get('ville', 'N/A')}")
+                            st.write(f"Quartier: {request.get('quartier', 'N/A')}")
                         
-                        with col_client2:
+                        with col_info2:
                             st.markdown("**🏠 Projet**")
-                            st.write(f"**Type:** {request.get('type_batiment', 'N/A')}")
-                            st.write(f"**Urgence:** {urgence_icon} {request.get('urgence', 'N/A')}")
-                            st.write(f"**Budget:** {request.get('budget_estime', 'N/A')}")
-                            st.write(f"**Installation:** {request.get('installation_existante', 'N/A')}")
-                            visite = "✅ Oui" if request.get('visite_technique') else "❌ Non"
-                            st.write(f"**Visite technique:** {visite}")
+                            st.write(f"Type: {request.get('type_batiment', 'N/A')}")
+                            st.write(f"Urgence: {_urgence}")
+                            st.write(f"Budget: {request.get('budget_estime', 'N/A')}")
+                            st.write(f"Installation existante: {request.get('installation_existante', 'N/A')}")
+                            st.write(f"Visite technique: {'Oui' if request.get('visite_technique', False) else 'Non'}")
                         
-                        with col_client3:
+                        with col_info3:
                             st.markdown("**⚡ Dimensionnement**")
                             dim = request.get('dimensionnement', {})
-                            st.write(f"**Consommation:** {dim.get('consommation_kwh_jour', 0):.1f} kWh/jour")
-                            st.write(f"**Puissance:** {dim.get('puissance_totale_kwc', 0):.2f} kWc")
-                            st.write(f"**Voltage:** {dim.get('voltage_systeme', 'N/A')}V")
-                            st.write(f"**Batterie:** {dim.get('type_batterie', 'N/A')}")
-                            st.write(f"**Prix total:** {dim.get('prix_total_fcfa', 0):,} FCFA")
+                            st.write(f"Consommation: {dim.get('consommation_kwh_jour', 'N/A')} kWh/j")
+                            st.write(f"Puissance: {dim.get('puissance_totale_kwc', 'N/A')} kWc")
+                            st.write(f"Prix estimé: {dim.get('prix_total_fcfa', 'N/A'):,} FCFA" if dim.get('prix_total_fcfa') else "Prix: N/A")
+                            st.write(f"Batterie: {dim.get('type_batterie', 'N/A')}")
+                            st.write(f"Voltage: {dim.get('voltage_systeme', 'N/A')}V")
                         
-                        # Commentaires client
+                        # Commentaires
                         if request.get('commentaires'):
-                            st.markdown("**💬 Commentaires du client:**")
-                            st.info(request.get('commentaires'))
+                            st.markdown("**💬 Commentaires:**")
+                            st.write(request.get('commentaires', 'Aucun commentaire'))
                         
-                        # Gestion admin
+                        # Gestion du statut
                         st.markdown("---")
-                        st.markdown("**⚙️ Actions Admin**")
+                        st.markdown("**📋 Gestion Admin**")
                         
-                        col_action1, col_action2 = st.columns(2)
+                        col_status1, col_status2 = st.columns(2)
                         
-                        with col_action1:
-                            # Changer le statut
+                        with col_status1:
                             new_status = st.selectbox(
-                                "Statut",
+                                "Changer le statut",
                                 ["nouveau", "en_cours", "traite"],
-                                index=["nouveau", "en_cours", "traite"].index(status),
-                                key=f"status_{i}"
+                                index=["nouveau", "en_cours", "traite"].index(_status),
+                                key=f"status_{request.get('id', '')}"
                             )
-                        
-                        with col_action2:
-                            # Notes admin
-                            admin_notes = st.text_area(
-                                "Notes admin",
-                                value=request.get('admin_notes', ''),
-                                placeholder="Ajouter des notes sur le suivi...",
-                                height=100,
-                                key=f"notes_{i}"
-                            )
-                        
-                        # Boutons d'action
-                        col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
-                        
-                        with col_btn1:
-                            if st.button(f"💾 Mettre à jour", key=f"update_{i}"):
-                                if update_client_request_status(request['id'], new_status, admin_notes):
-                                    st.success("✅ Demande mise à jour!")
+                            
+                            if st.button(f"💾 Mettre à jour", key=f"update_status_{request.get('id', '')}"):
+                                if update_client_request_status(request.get('id'), new_status):
+                                    st.success("✅ Statut mis à jour!")
                                     st.rerun()
                                 else:
                                     st.error("❌ Erreur lors de la mise à jour")
                         
-                        with col_btn2:
-                            # Lien pour appeler
-                            phone = request.get('telephone', '').replace(' ', '').replace('+', '')
-                            if phone:
-                                st.markdown(f"📞 [Appeler]({f'tel:{phone}'})")
-                        
-                        with col_btn3:
-                            # Lien pour envoyer email
-                            email = request.get('email_client', '')
-                            if email:
-                                subject = f"Votre demande de dimensionnement solaire - {request.get('nom_client', '')}"
-                                st.markdown(f"📧 [Email](mailto:{email}?subject={subject})")
-                        
-                        with col_btn4:
-                            _confirm_del_r = st.checkbox(
-                                "Confirmer suppression",
-                                key=f"confirm_del_req_{request.get('id','')}"
+                        with col_status2:
+                            admin_notes = st.text_area(
+                                "Notes admin",
+                                value=request.get('admin_notes', ''),
+                                key=f"notes_{request.get('id', '')}",
+                                height=100
                             )
-                            if st.button("🗑️ Supprimer", key=f"btn_del_req_{request.get('id','')}"):
-                                if _confirm_del_r:
-                                    if delete_client_request(request.get('id')):
-                                        st.success("✅ Demande supprimée.")
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Échec de suppression de la demande.")
+                        
+                        # Actions de suppression
+                        st.markdown("---")
+                        _confirm_del_r = st.checkbox(
+                            "Confirmer la suppression de cette demande",
+                            key=f"confirm_del_request_{request.get('id','')}"
+                        )
+                        if st.button(
+                            "🗑️ Supprimer cette demande",
+                            key=f"btn_del_request_{request.get('id','')}"
+                        ):
+                            if _confirm_del_r:
+                                if delete_client_request(request.get('id')):
+                                    st.success("✅ Demande supprimée.")
+                                    st.rerun()
                                 else:
-                                    st.warning("Veuillez cocher la confirmation avant suppression.")
+                                    st.error("❌ Échec de suppression de la demande.")
+                            else:
+                                st.warning("Veuillez cocher la confirmation avant suppression.")
                         
                         # Informations système
                         st.markdown("---")
@@ -2323,6 +2793,11 @@ if is_user_authenticated() and is_admin_user():
             else:
                 st.info("📭 Aucune demande client pour le moment")
                 st.markdown("Les demandes apparaîtront ici quand les clients utiliseront le formulaire de contact dans l'onglet Dimensionnement.")
+            
+            # Historique des modifications (optionnel)
+            with st.expander("📋 Historique des modifications"):
+                st.markdown("*Fonctionnalité à venir : historique des changements de pourcentages*")
+                st.caption("Cette section affichera l'historique des modifications des pourcentages de main d'œuvre.")
 
 st.markdown("---")
 st.markdown("""
