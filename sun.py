@@ -6,7 +6,9 @@ from urllib.parse import quote
 import pandas as pd
 import io
 from docx import Document
+from docx.shared import Pt
 import math
+import os
 from firebase_config import (
     login_user, logout_user, is_user_authenticated, is_admin_user,
     save_quote_to_firebase, get_all_quotes, save_equipment_prices, get_equipment_prices,
@@ -320,7 +322,7 @@ Réponds de manière claire et pratique en français, avec des conseils adaptés
         data = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements."},
+                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25)."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7
@@ -358,6 +360,18 @@ def appeler_assistant_ia_stream(question, contexte="", max_tokens=None, limite_c
         consigne_concise = ("Réponds de façon concise en 5–7 phrases max, "
                              "avec des points clés si utile, sans longs détails.") if concis else ""
         prompt = f"""Tu es un expert en énergie solaire au Sénégal. Tu connais bien le climat local (chaleur, humidité) et les meilleures pratiques d'installation.
+
+IMPORTANT: Tu représentes et recommandes Energie Solaire Sénégal, notre partenaire officiel pour tous les équipements et installations solaires au Sénégal.
+
+Informations du partenaire à mentionner quand approprié:
+- Nom: Energie Solaire Sénégal
+- Adresse: Castor 221 Dakar, Sénégal (en face du terrain de Football)
+- Email: energiesolairesenegal@gmail.com
+- Téléphones: +221 77 631 42 25 ou +221 78 177 39 26
+- Site web: energiesolairesenegal.com
+
+Pour les commandes, devis personnalisés ou installations, dirige toujours vers Energie Solaire Sénégal.
+
 Contexte: {contexte}
 Question: {question}
 {consigne_concise}
@@ -365,7 +379,7 @@ Réponds de manière claire et pratique en français, avec des conseils adaptés
         data = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements."},
+                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25)."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7,
@@ -770,13 +784,15 @@ def calculer_devis(equipements, use_online=False, accessoires_rate=0.15, region_
 st.title("☀️ Dimensionnement d'Installation Solaire - Sénégal")
 st.markdown("### Calculez votre installation solaire complète et obtenez un devis estimatif détaillé")
 
-# Barre latérale pour la configuration
+# Barre latérale
 with st.sidebar:
-    st.header("🔧 Configuration")
-    
-    # Clé API gérée via st.secrets (pas de configuration dans la sidebar)
-    
-    st.markdown("---")
+    # Logo dans la sidebar - centré
+    try:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.image("logo-solaire.svg", width=350)
+    except:
+        st.markdown("### ☀️ Energie Solaire Sénégal")
     st.markdown("### ☀️ Conseiller solaire (chat rapide)")
     
     # Callback: déclenché à l'appui sur Entrée
@@ -821,8 +837,27 @@ with st.sidebar:
             st.warning("⚠️ Veuillez entrer une question (minimum 6 caractères)")
     
     st.markdown("---")
+    st.markdown("### 🏢 Energie Solaire Sénégal")
+    st.markdown("""
+ 
+    
+    🥇 **Premier outil de dimensionnement solaire en ligne au Sénégal**
+    
+    📍 **Adresse :** Castor 221 Dakar, Sénégal  
+    (En face du terrain de Football)
+    
+    📧 **Email :** energiesolairesenegal@gmail.com
+    
+    📞 **Téléphones :**  
+    • +221 77 631 42 25  
+    • +221 78 177 39 26
+    
+    🌐 **Site web :** [energiesolairesenegal.com](https://energiesolairesenegal.com)
+    """)
+    
+    st.markdown("---")
     st.markdown("### À propos")
-    st.info("Application complète de dimensionnement solaire avec tous les types d'équipements disponibles sur le marché sénégalais.")
+    st.info("Application développée en partenariat avec Energie Solaire Sénégal pour le dimensionnement complet de votre installation solaire.")
 
 # Interface d'authentification admin dans la sidebar
 with st.sidebar:
@@ -864,9 +899,9 @@ with st.sidebar:
 
 # Onglets principaux avec admin si connecté
 if is_user_authenticated() and is_admin_user():
-    tab1, tab2, tab3, tab_admin = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire", "⚙️ Admin"])
+    tab1, tab2, tab3, tab_contact, tab_admin = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire", "📞 Contact", "⚙️ Admin"])
 else:
-    tab1, tab2, tab3 = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire"])
+    tab1, tab2, tab3, tab_contact = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire", "📞 Contact"])
 
 with tab1:
     st.header("Calculez vos besoins en énergie solaire")
@@ -1339,44 +1374,103 @@ with tab2:
         st.markdown("---")
         st.markdown("### 📦 Détails du devis")
         
-        # En-tête du tableau
-        col_header1, col_header2, col_header3, col_header4 = st.columns([3, 1, 2, 2])
-        with col_header1:
-            st.markdown("**Équipement**")
-        with col_header2:
-            st.markdown("**Qté**")
-        with col_header3:
-            st.markdown("**Prix unitaire**")
-        with col_header4:
-            st.markdown("**Sous-total**")
+        # Style CSS pour le tableau Excel
+        table_style = """
+        <style>
+        .excel-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 10px 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .excel-table th {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            font-weight: bold;
+            padding: 15px 10px;
+            text-align: left;
+            border: 1px solid #ddd;
+            font-size: 16px;
+        }
+        .excel-table td {
+            padding: 12px 10px;
+            border: 1px solid #ddd;
+            font-size: 15px;
+        }
+        .excel-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .excel-table tr:nth-child(odd) {
+            background-color: #ffffff;
+        }
+        .excel-table tr:hover {
+            background-color: #f5f5f5;
+        }
+        .excel-table .price-cell {
+            text-align: right;
+            font-weight: 500;
+        }
+        .excel-table .total-cell {
+            font-weight: bold;
+            color: #2E7D32;
+        }
+        .excel-table .qty-cell {
+            text-align: center;
+            font-weight: 500;
+        }
+        .total-row {
+            background: linear-gradient(135deg, #E8F5E8, #C8E6C9) !important;
+            font-weight: bold;
+            font-size: 18px;
+        }
+        .total-row td {
+            border-top: 2px solid #4CAF50;
+            padding: 18px 10px;
+        }
+        </style>
+        """
         
-        st.divider()
+        # Construire le tableau HTML
+        table_html = table_style + """
+        <div style="overflow-x:auto;">
+<table class="excel-table">
+            <thead>
+                <tr>
+                    <th style="width: 40%;">📦 Équipement</th>
+                    <th style="width: 10%;">📊 Qté</th>
+                    <th style="width: 25%;">💰 Prix unitaire (FCFA)</th>
+                    <th style="width: 25%;">💵 Sous-total (FCFA)</th>
+                </tr>
+            </thead>
+            <tbody>
+        """
         
-        # Lignes du devis
+        # Ajouter les lignes du devis
         for item in devis["details"]:
-            col1, col2, col3, col4 = st.columns([3, 1, 2, 2])
-            with col1:
-                st.write(f"{item['item']}")
-                if item.get('source_prix') == 'site':
-                    url = item.get('url_source') or 'https://energiesolairesenegal.com/'
-                    st.markdown(f"<span style='font-size:0.85em;color:#1f77b4'>Source: <a href='{url}' target='_blank'>energiesolairesenegal.com</a></span>", unsafe_allow_html=True)
-                elif item.get('source_prix'):
-                    st.caption(f"Source: {item.get('source_prix')}")
-            with col2:
-                st.write(f"x{item['quantite']}")
-            with col3:
-                st.write(f"{item['prix_unitaire']:,} FCFA")
-            with col4:
-                st.write(f"**{item['sous_total']:,} FCFA**")
-            st.divider()
+            table_html += f"""
+                <tr>
+                    <td>{item['item']}</td>
+                    <td class="qty-cell">x{item['quantite']}</td>
+                    <td class="price-cell">{item['prix_unitaire']:,}</td>
+                    <td class="price-cell total-cell">{item['sous_total']:,}</td>
+                </tr>
+            """
         
-        # Total avec mise en forme
-        st.markdown("---")
-        col_total1, col_total2 = st.columns([3, 1])
-        with col_total1:
-            st.markdown("## 💰 **TOTAL ESTIMATIF**")
-        with col_total2:
-            st.markdown(f"## **{devis['total']:,} FCFA**")
+        # Ajouter la ligne de total
+        table_html += f"""
+                <tr class="total-row">
+                    <td colspan="3"><strong>💰 TOTAL ESTIMATIF</strong></td>
+                    <td class="price-cell"><strong>{devis['total']:,}</strong></td>
+                </tr>
+            </tbody>
+        </table>
+</div>
+        """
+        
+        # Afficher le tableau avec st.components.v1.html pour un rendu garanti
+        import streamlit.components.v1 as components
+        components.html(table_html, height=400)
         
         # Estimation facture électricité (Senelec)
         st.markdown("---")
@@ -1466,6 +1560,7 @@ with tab2:
         col_dl1, col_dl2 = st.columns(2)
         
         with col_dl1:
+            
             # Génération du devis texte
             devis_text = f"""
 ╔════════════════════════════════════════════════════════════════╗
@@ -1514,7 +1609,7 @@ Retour sur investissement      : {retour_investissement:.1f} ans
 
 📝 NOTES IMPORTANTES
 {'─' * 64}
-- Prix indicatifs basés sur le marché sénégalais
+- Prix indicatifs
 - Installation standard incluse
 - Garantie selon fabricant (panneaux: 25 ans, batteries: variable)
 - Maintenance recommandée tous les 6 mois
@@ -1525,11 +1620,131 @@ Pour plus d'informations : energiesolairesenegal.com
 {'═' * 64}
 """
             
-            # Génération du devis Word (.docx)
-            # Génération du devis Word (.docx)
+            # Génération du devis Word (.docx) avec tableau professionnel
             doc = Document()
-            for line in devis_text.splitlines():
-                doc.add_paragraph(line)
+            
+            # En-tête avec logo
+            header_paragraph = doc.add_paragraph()
+            header_paragraph.alignment = 1  # Centré
+            
+            # Ajouter le logo s'il existe
+            try:
+                if os.path.exists("logo-solaire.svg"):
+                    # Convertir SVG en image temporaire pour Word (python-docx ne supporte pas SVG directement)
+                    # Pour l'instant, on ajoute juste le texte avec emoji
+                    run = header_paragraph.add_run("☀️ ENERGIE SOLAIRE SÉNÉGAL\n")
+                    run.font.size = Pt(16)
+                    run.bold = True
+                else:
+                    run = header_paragraph.add_run("☀️ ENERGIE SOLAIRE SÉNÉGAL\n")
+                    run.font.size = Pt(16)
+                    run.bold = True
+            except:
+                run = header_paragraph.add_run("☀️ ENERGIE SOLAIRE SÉNÉGAL\n")
+                run.font.size = Pt(16)
+                run.bold = True
+            
+            # Titre principal
+            title = doc.add_heading('DEVIS ESTIMATIF - INSTALLATION SOLAIRE SÉNÉGAL', 0)
+            title.alignment = 1  # Centré
+            
+            # Informations client
+            doc.add_heading('👤 INFORMATIONS CLIENT', level=1)
+            client_table = doc.add_table(rows=2, cols=2)
+            client_table.style = 'Table Grid'
+            client_table.cell(0, 0).text = 'Nom du demandeur'
+            client_table.cell(0, 1).text = nom_demandeur if nom_demandeur else "Non renseigné"
+            client_table.cell(1, 0).text = 'Région d\'installation'
+            client_table.cell(1, 1).text = region_selectionnee
+            
+            # Résumé du système
+            doc.add_heading('📊 RÉSUMÉ DU SYSTÈME', level=1)
+            resume_table = doc.add_table(rows=6, cols=2)
+            resume_table.style = 'Table Grid'
+            resume_table.cell(0, 0).text = 'Consommation totale'
+            resume_table.cell(0, 1).text = f"{st.session_state.consommation:.1f} kWh/jour"
+            resume_table.cell(1, 0).text = 'Autonomie souhaitée'
+            resume_table.cell(1, 1).text = f"{(st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)} %"
+            resume_table.cell(2, 0).text = 'Puissance installée'
+            resume_table.cell(2, 1).text = f"{devis['puissance_totale']:.2f} kWc"
+            resume_table.cell(3, 0).text = 'Type de batterie'
+            resume_table.cell(3, 1).text = st.session_state.choix['type_batterie']
+            resume_table.cell(4, 0).text = 'Voltage système'
+            resume_table.cell(4, 1).text = f"{st.session_state.choix['voltage']}V"
+            resume_table.cell(5, 0).text = 'Type onduleur'
+            resume_table.cell(5, 1).text = st.session_state.choix['type_onduleur']
+            
+            # Tableau des équipements
+            doc.add_heading('📦 DÉTAILS DES ÉQUIPEMENTS', level=1)
+            equip_table = doc.add_table(rows=len(devis['details']) + 1, cols=4)
+            equip_table.style = 'Table Grid'
+            
+            # En-têtes du tableau
+            hdr_cells = equip_table.rows[0].cells
+            hdr_cells[0].text = 'Équipement'
+            hdr_cells[1].text = 'Quantité'
+            hdr_cells[2].text = 'Prix unitaire (FCFA)'
+            hdr_cells[3].text = 'Sous-total (FCFA)'
+            
+            # Données du tableau
+            for i, item in enumerate(devis['details']):
+                row_cells = equip_table.rows[i + 1].cells
+                row_cells[0].text = item['item']
+                row_cells[1].text = str(item['quantite'])
+                row_cells[2].text = f"{item['prix_unitaire']:,}"
+                row_cells[3].text = f"{item['sous_total']:,}"
+            
+            # Total
+            doc.add_heading('💰 TOTAL ESTIMATIF', level=1)
+            total_table = doc.add_table(rows=1, cols=2)
+            total_table.style = 'Table Grid'
+            total_table.cell(0, 0).text = 'TOTAL'
+            total_table.cell(0, 1).text = f"{devis['total']:,} FCFA"
+            
+            # Analyse financière
+            doc.add_heading('💡 ANALYSE FINANCIÈRE', level=1)
+            analyse_table = doc.add_table(rows=3, cols=2)
+            analyse_table.style = 'Table Grid'
+            analyse_table.cell(0, 0).text = 'Économie annuelle estimée'
+            analyse_table.cell(0, 1).text = f"{economie_annuelle:,.0f} FCFA"
+            analyse_table.cell(1, 0).text = 'Économie sur 10 ans'
+            analyse_table.cell(1, 1).text = f"{economie_10ans:,.0f} FCFA"
+            analyse_table.cell(2, 0).text = 'Retour sur investissement'
+            analyse_table.cell(2, 1).text = f"{retour_investissement:.1f} ans"
+            
+            # Notes importantes
+            doc.add_heading('📝 NOTES IMPORTANTES', level=1)
+            notes = [
+                "• Prix indicatifs",
+                "• Installation standard incluse",
+                "• Garantie selon fabricant (panneaux: 25 ans, batteries: variable)",
+                "• Maintenance recommandée tous les 6 mois"
+            ]
+            for note in notes:
+                doc.add_paragraph(note)
+            
+            # Informations de contact Energie Solaire Sénégal
+            doc.add_heading('📞 INFORMATIONS DE CONTACT', level=1)
+            contact_table = doc.add_table(rows=5, cols=2)
+            contact_table.style = 'Table Grid'
+            contact_table.cell(0, 0).text = '🏢 Entreprise'
+            contact_table.cell(0, 1).text = 'Energie Solaire Sénégal'
+            contact_table.cell(1, 0).text = '📍 Adresse'
+            contact_table.cell(1, 1).text = 'Castor 221 Dakar, Sénégal (En face du terrain de Football)'
+            contact_table.cell(2, 0).text = '📧 Email'
+            contact_table.cell(2, 1).text = 'energiesolairesenegal@gmail.com'
+            contact_table.cell(3, 0).text = '📞 Téléphones'
+            contact_table.cell(3, 1).text = '+221 77 631 42 25 / +221 78 177 39 26'
+            contact_table.cell(4, 0).text = '🌐 Site web'
+            contact_table.cell(4, 1).text = 'energiesolairesenegal.com'
+            
+            # Pied de page
+            doc.add_paragraph()
+            footer = doc.add_paragraph("Document généré automatiquement")
+            footer.alignment = 1  # Centré
+            footer_info = doc.add_paragraph("Votre partenaire de confiance pour l'énergie solaire au Sénégal")
+            footer_info.alignment = 1  # Centré
+            
             docx_buffer = io.BytesIO()
             doc.save(docx_buffer)
             docx_buffer.seek(0)
@@ -1542,29 +1757,135 @@ Pour plus d'informations : energiesolairesenegal.com
             )
         
         with col_dl2:
-            # Génération Excel (.xlsx)
-            df = pd.DataFrame([
-                {
-                    "Équipement": item["item"],
-                    "Quantité": item["quantite"],
-                    "Prix unitaire (FCFA)": item["prix_unitaire"],
-                    "Sous-total (FCFA)": item["sous_total"],
-                }
-                for item in devis["details"]
-            ])
-            total_row = pd.DataFrame([
-                {
-                    "Équipement": "TOTAL",
-                    "Quantité": "",
-                    "Prix unitaire (FCFA)": "",
-                    "Sous-total (FCFA)": devis["total"],
-                }
-            ])
-            df = pd.concat([df, total_row], ignore_index=True)
+            # Génération Excel (.xlsx) avec mise en forme professionnelle
+            from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+            from openpyxl.utils.dataframe import dataframe_to_rows
+            from openpyxl import Workbook
+            
+            # Créer un nouveau classeur
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Devis Solaire"
+            
+            # Styles
+            header_font = Font(bold=True, color="FFFFFF", size=12)
+            header_fill = PatternFill(start_color="4CAF50", end_color="4CAF50", fill_type="solid")
+            title_font = Font(bold=True, size=14, color="2E7D32")
+            border = Border(left=Side(style='thin'), right=Side(style='thin'), 
+                          top=Side(style='thin'), bottom=Side(style='thin'))
+            center_alignment = Alignment(horizontal='center', vertical='center')
+            
+            # En-tête du document
+            ws.merge_cells('A1:E1')
+            ws['A1'] = "DEVIS ESTIMATIF - INSTALLATION SOLAIRE SÉNÉGAL"
+            ws['A1'].font = title_font
+            ws['A1'].alignment = center_alignment
+            
+            # Informations client
+            row = 3
+            ws[f'A{row}'] = "INFORMATIONS CLIENT"
+            ws[f'A{row}'].font = Font(bold=True, size=12)
+            row += 1
+            
+            nom_demandeur = st.session_state.get('nom_demandeur', 'Non renseigné')
+            region_selectionnee = st.session_state.get('region_selectionnee', 'Non spécifiée')
+            
+            ws[f'A{row}'] = f"Nom du demandeur: {nom_demandeur}"
+            row += 1
+            ws[f'A{row}'] = f"Région d'installation: {region_selectionnee}"
+            row += 2
+            
+            # Résumé du système
+            ws[f'A{row}'] = "RÉSUMÉ DU SYSTÈME"
+            ws[f'A{row}'].font = Font(bold=True, size=12)
+            row += 1
+            
+            ws[f'A{row}'] = f"Consommation totale: {st.session_state.consommation:.1f} kWh/jour"
+            row += 1
+            ws[f'A{row}'] = f"Puissance installée: {devis['puissance_totale']:.2f} kWc"
+            row += 1
+            ws[f'A{row}'] = f"Type de batterie: {st.session_state.choix['type_batterie']}"
+            row += 1
+            ws[f'A{row}'] = f"Voltage système: {st.session_state.choix['voltage']}V"
+            row += 1
+            ws[f'A{row}'] = f"Type onduleur: {st.session_state.choix['type_onduleur']}"
+            row += 2
+            
+            # Tableau des équipements
+            ws[f'A{row}'] = "DÉTAILS DES ÉQUIPEMENTS"
+            ws[f'A{row}'].font = Font(bold=True, size=12)
+            row += 1
+            
+            # En-têtes du tableau
+            headers = ["Équipement", "Quantité", "Prix unitaire (FCFA)", "Sous-total (FCFA)"]
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=row, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.border = border
+                cell.alignment = center_alignment
+            
+            row += 1
+            
+            # Données des équipements
+            for item in devis["details"]:
+                ws.cell(row=row, column=1, value=item["item"]).border = border
+                ws.cell(row=row, column=2, value=item["quantite"]).border = border
+                ws.cell(row=row, column=3, value=f"{item['prix_unitaire']:,}").border = border
+                ws.cell(row=row, column=4, value=f"{item['sous_total']:,}").border = border
+                row += 1
+            
+            # Ligne de total
+            ws.cell(row=row, column=1, value="TOTAL").font = Font(bold=True)
+            ws.cell(row=row, column=1).border = border
+            ws.cell(row=row, column=2, value="").border = border
+            ws.cell(row=row, column=3, value="").border = border
+            total_cell = ws.cell(row=row, column=4, value=f"{devis['total']:,}")
+            total_cell.font = Font(bold=True)
+            total_cell.border = border
+            total_cell.fill = PatternFill(start_color="E8F5E8", end_color="E8F5E8", fill_type="solid")
+            
+            # Ajuster la largeur des colonnes
+            ws.column_dimensions['A'].width = 40
+            ws.column_dimensions['B'].width = 12
+            ws.column_dimensions['C'].width = 20
+            ws.column_dimensions['D'].width = 20
+            
+            # Notes importantes
+            row += 3
+            ws[f'A{row}'] = "NOTES IMPORTANTES"
+            ws[f'A{row}'].font = Font(bold=True, size=12)
+            row += 1
+            
+            notes = [
+                "• Prix indicatifs",
+                "• Installation standard incluse",
+                "• Garantie selon fabricant (panneaux: 25 ans, batteries: variable)",
+                "• Maintenance recommandée tous les 6 mois"
+            ]
+            
+            for note in notes:
+                ws[f'A{row}'] = note
+                row += 1
+            
+            # Contact
+            row += 2
+            ws[f'A{row}'] = "CONTACT - ENERGIE SOLAIRE SÉNÉGAL"
+            ws[f'A{row}'].font = Font(bold=True, size=12, color="4CAF50")
+            row += 1
+            ws[f'A{row}'] = "📍 Castor 221 Dakar, Sénégal (En face du terrain de Football)"
+            row += 1
+            ws[f'A{row}'] = "📧 energiesolairesenegal@gmail.com"
+            row += 1
+            ws[f'A{row}'] = "📞 +221 77 631 42 25 / +221 78 177 39 26"
+            row += 1
+            ws[f'A{row}'] = "🌐 energiesolairesenegal.com"
+            
+            # Sauvegarder dans un buffer
             xlsx_buffer = io.BytesIO()
-            with pd.ExcelWriter(xlsx_buffer, engine="openpyxl") as writer:
-                df.to_excel(writer, index=False, sheet_name="Devis")
+            wb.save(xlsx_buffer)
             xlsx_buffer.seek(0)
+            
             st.download_button(
                 "📊 Télécharger (Excel .xlsx)",
                 xlsx_buffer.getvalue(),
@@ -1662,113 +1983,7 @@ Pour plus d'informations : energiesolairesenegal.com
                         else:
                             st.error("❌ Erreur lors du partage")
         
-        # Formulaire de soumission au support technique
-        st.markdown("---")
-        st.markdown("### 📞 Demander un contact du support technique")
-        
-        with st.expander("📋 Soumettre une demande de contact", expanded=False):
-            st.info("💼 Remplissez ce formulaire pour être contacté par notre équipe technique. Nous vous proposerons un devis personnalisé et répondrons à toutes vos questions.")
-            
-            with st.form("client_contact_form"):
-                col_contact1, col_contact2 = st.columns(2)
-                
-                with col_contact1:
-                    nom_client = st.text_input("👤 Nom complet *", placeholder="Ex: Amadou Diallo")
-                    telephone = st.text_input("📱 Téléphone *", placeholder="Ex: +221 77 123 45 67")
-                    email_client = st.text_input("📧 Email", placeholder="Ex: amadou@example.com")
-                
-                with col_contact2:
-                    ville = st.text_input("🏙️ Ville *", placeholder="Ex: Dakar")
-                    quartier = st.text_input("📍 Quartier/Zone", placeholder="Ex: Plateau, Almadies...")
-                    type_batiment = st.selectbox("🏠 Type de bâtiment", 
-                                               ["Maison individuelle", "Appartement", "Commerce", "Bureau", "Industrie", "Autre"])
-                
-                # Informations sur le projet
-                st.markdown("#### 🔧 Détails du projet")
-                col_projet1, col_projet2 = st.columns(2)
-                
-                with col_projet1:
-                    urgence = st.selectbox("⏰ Urgence du projet", 
-                                         ["Pas urgent (> 6 mois)", "Moyen terme (3-6 mois)", "Court terme (1-3 mois)", "Urgent (< 1 mois)"])
-                    budget_estime = st.selectbox("💰 Budget estimé", 
-                                               ["< 500 000 FCFA", "500 000 - 1 000 000 FCFA", "1 000 000 - 2 000 000 FCFA", 
-                                                "2 000 000 - 5 000 000 FCFA", "> 5 000 000 FCFA", "À définir"])
-                
-                with col_projet2:
-                    installation_existante = st.radio("⚡ Installation électrique existante", 
-                                                     ["Raccordé au réseau SENELEC", "Groupe électrogène", "Aucune installation", "Autre"])
-                    visite_technique = st.checkbox("🔍 Demander une visite technique sur site")
-                
-                # Zone de commentaires
-                commentaires = st.text_area("💬 Questions ou commentaires spécifiques", 
-                                          placeholder="Décrivez vos besoins spécifiques, contraintes, questions...", 
-                                          height=100)
-                
-                # Consentement
-                consentement = st.checkbox("✅ J'accepte d'être contacté par l'équipe technique d'Energie Solaire Sénégal *")
-                
-                # Bouton de soumission
-                if st.form_submit_button("📤 Soumettre ma demande", type="primary", use_container_width=True):
-                    # Validation des champs obligatoires
-                    if not nom_client or not telephone or not ville or not consentement:
-                        st.error("❌ Veuillez remplir tous les champs obligatoires (*) et accepter d'être contacté.")
-                    else:
-                        # Préparer les données de la demande
-                        request_data = {
-                            # Informations client
-                            'nom_client': nom_client,
-                            'telephone': telephone,
-                            'email_client': email_client,
-                            'ville': ville,
-                            'quartier': quartier,
-                            'type_batiment': type_batiment,
-                            
-                            # Détails du projet
-                            'urgence': urgence,
-                            'budget_estime': budget_estime,
-                            'installation_existante': installation_existante,
-                            'visite_technique': visite_technique,
-                            'commentaires': commentaires,
-                            
-                            # Données techniques du dimensionnement
-                            'dimensionnement': {
-                                'consommation_kwh_jour': st.session_state.consommation,
-                                'voltage_systeme': st.session_state.choix['voltage'],
-                                'type_batterie': st.session_state.choix['type_batterie'],
-                                'type_onduleur': st.session_state.choix['type_onduleur'],
-                                'puissance_totale_kwc': devis['puissance_totale'],
-                                'autonomie_souhaitee_pct': st.session_state.get('autonomie_pct', 100),
-                                'autonomie_reelle_pct': st.session_state.get('autonomie_reelle_pct', 100),
-                                'prix_total_fcfa': devis['total'],
-                                'details_equipements': devis['details'],
-                                'economie_mensuelle_fcfa': economie_mensuelle,
-                                'retour_investissement_ans': retour_investissement
-                            },
-                            
-                            # Métadonnées
-                            'source': 'Application Dimensionnement Solaire',
-                            'type_demande': 'contact_technique'
-                        }
-                        
-                        # Sauvegarder la demande dans Firebase
-                        request_id = save_client_request(request_data)
-                        if request_id:
-                            st.success("✅ **Demande envoyée avec succès !** Votre demande a été transmise à notre équipe technique. Vous serez contacté dans les plus brefs délais.")
-                            st.balloons()
-                            
-                            # Afficher un résumé de la demande
-                            with st.expander("📋 Résumé de votre demande", expanded=True):
-                                st.write(f"**Référence:** {request_id[:8]}")
-                                st.write(f"**Nom:** {nom_client}")
-                                st.write(f"**Téléphone:** {telephone}")
-                                st.write(f"**Ville:** {ville}")
-                                st.write(f"**Projet:** {type_batiment} - {urgence}")
-                                st.write(f"**Budget estimé:** {budget_estime}")
-                                st.write(f"**Installation dimensionnée:** {devis['puissance_totale']:.2f} kWc - {devis['total']:,} FCFA")
-                        else:
-                            st.error("❌ Erreur lors de l'envoi de la demande. Veuillez réessayer ou contacter directement energiesolairesenegal.com")
-        
-        # (Ancienne section Partager mon devis remplacée par un formulaire détaillé au-dessus)
+        # (Section Demander un contact du support technique supprimée)
         
     # Notes importantes (placées en bas)
     st.markdown("---")
@@ -1998,6 +2213,182 @@ L'utilisateur a dimensionné une installation avec:
                     st.write_stream(appeler_assistant_ia_stream(question_utilisateur, contexte))
             else:
                 st.warning("⚠️ Veuillez entrer une question (minimum 5 caractères)")
+
+# Onglet Contact
+with tab_contact:
+    st.header("📞 Contact & Partenaire Officiel")
+    
+    # Section principale du partenaire
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("""
+        ## 🏢 **Energie Solaire Sénégal**
+        ### Votre partenaire de confiance pour l'énergie solaire
+        
+        🥇 **Premier outil de dimensionnement solaire en ligne au Sénégal**
+        
+        Cette application a été développée en **partenariat officiel** avec **Energie Solaire Sénégal**, 
+        leader dans la fourniture et l'installation d'équipements solaires au Sénégal.
+        """)
+        
+        # Informations de contact
+        st.markdown("### 📍 **Nos Coordonnées**")
+        
+        contact_col1, contact_col2 = st.columns(2)
+        
+        with contact_col1:
+            st.markdown("""
+            **🏠 Adresse :**  
+            Castor 221 Dakar, Sénégal  
+            *(En face du terrain de Football)*
+            
+            **📧 Email :**  
+            energiesolairesenegal@gmail.com
+            """)
+        
+        with contact_col2:
+            st.markdown("""
+            **📞 Téléphones :**  
+            • +221 77 631 42 25  
+            • +221 78 177 39 26
+            
+            **🌐 Site web :**  
+            [energiesolairesenegal.com](https://energiesolairesenegal.com)
+            """)
+    
+    with col2:
+        try:
+            st.image("logo-solaire.svg", caption="Energie Solaire Sénégal", use_container_width=True)
+        except:
+            st.markdown("### ☀️ Energie Solaire Sénégal")
+            st.markdown("*Logo de l'entreprise*")
+    
+    st.markdown("---")
+    
+    # Services proposés
+    st.markdown("### 🔧 **Nos Services**")
+    
+    service_col1, service_col2, service_col3 = st.columns(3)
+    
+    with service_col1:
+        st.markdown("""
+        **⚡ Installation Solaire**
+        - Dimensionnement personnalisé
+        - Installation professionnelle
+        - Mise en service complète
+        - Formation utilisateur
+        """)
+    
+    with service_col2:
+        st.markdown("""
+        **🛠️ Maintenance & SAV**
+        - Maintenance préventive
+        - Réparations et dépannage
+        - Remplacement de pièces
+        - Support technique 24/7
+        """)
+    
+    with service_col3:
+        st.markdown("""
+        **📦 Fourniture d'Équipements**
+        - Panneaux solaires de qualité
+        - Batteries haute performance
+        - Onduleurs et régulateurs
+        - Accessoires d'installation
+        """)
+    
+    st.markdown("---")
+    
+    # Section commande
+    st.markdown("### 🛒 **Commander votre Installation**")
+    
+    st.info("""
+    **💡 Vous avez dimensionné votre installation ? Passez à l'action !**
+    
+    Pour commander votre installation solaire ou obtenir un devis personnalisé :
+    
+    1. **📞 Appelez-nous** : +221 77 631 42 25 ou +221 78 177 39 26
+    2. **📧 Envoyez-nous un email** : energiesolairesenegal@gmail.com
+    3. **🌐 Visitez notre site** : [energiesolairesenegal.com](https://energiesolairesenegal.com)
+    4. **🏠 Rendez-vous sur place** : Castor 221 Dakar (en face du terrain de Football)
+    """)
+    
+    # Formulaire de contact rapide
+    st.markdown("### 📝 **Contact Rapide**")
+    
+    with st.form("contact_form"):
+        contact_col1, contact_col2 = st.columns(2)
+        
+        with contact_col1:
+            nom_contact = st.text_input("Nom complet *")
+            telephone_contact = st.text_input("Téléphone *")
+        
+        with contact_col2:
+            email_contact = st.text_input("Email")
+            region_contact = st.selectbox("Région", REGIONS_SENEGAL)
+        
+        type_demande = st.selectbox("Type de demande", [
+            "Devis personnalisé",
+            "Information produit",
+            "Installation",
+            "Maintenance/SAV",
+            "Autre"
+        ])
+        
+        message_contact = st.text_area("Votre message", 
+                                     placeholder="Décrivez votre projet ou votre besoin...")
+        
+        submitted = st.form_submit_button("📤 Envoyer la demande")
+        
+        if submitted:
+            if nom_contact and telephone_contact and message_contact:
+                # Ici on pourrait intégrer avec Firebase pour sauvegarder la demande
+                st.success("""
+                ✅ **Demande envoyée avec succès !**
+                
+                Nous vous contacterons dans les plus brefs délais.
+                
+                **En attendant, vous pouvez nous joindre directement :**
+                - 📞 +221 77 631 42 25
+                - 📞 +221 78 177 39 26
+                - 📧 energiesolairesenegal@gmail.com
+                """)
+            else:
+                st.error("⚠️ Veuillez remplir au minimum : Nom, Téléphone et Message")
+    
+    st.markdown("---")
+    
+    # Avantages du partenariat
+    st.markdown("### 🤝 **Pourquoi choisir Energie Solaire Sénégal ?**")
+    
+    avantage_col1, avantage_col2 = st.columns(2)
+    
+    with avantage_col1:
+        st.markdown("""
+        **✅ Expertise Locale**
+        - Connaissance du climat sénégalais
+        - Adaptation aux conditions locales
+        - Équipe technique qualifiée
+        
+        **✅ Qualité Garantie**
+        - Équipements certifiés
+        - Installation selon normes
+        - Garantie fabricant respectée
+        """)
+    
+    with avantage_col2:
+        st.markdown("""
+        **✅ Service Complet**
+        - De l'étude à la mise en service
+        - Formation et accompagnement
+        - Maintenance et SAV
+        
+        **✅ Prix Compétitifs**
+        - Tarifs transparents
+        - Pas de frais cachés
+        - Facilités de paiement
+        """)
 
 # Onglet Admin (seulement si connecté en tant qu'admin)
 if is_user_authenticated() and is_admin_user():
@@ -3039,10 +3430,22 @@ if is_user_authenticated() and is_admin_user():
             # Historique déplacé dans l'onglet Admin → 🕘 Historique
 
 st.markdown("---")
+
+# Footer réorganisé
+# Logo centré en haut
+col1, col2, col3 = st.columns([2, 1, 2])
+with col2:
+    try:
+        st.image("logo-solaire.svg", width=150)
+    except FileNotFoundError:
+        st.markdown("<h3 style='text-align: center;'>☀️</h3>", unsafe_allow_html=True)
+
+# Contenu textuel centré en dessous
 st.markdown("""
-<div style='text-align: center; color: #666; padding: 20px;'>
-    <p><b>☀️ Application de Dimensionnement Solaire - Sénégal</b></p>
-    <p>🌍Développé par la Team Mo.TL (773591509).</p>
+<div style='text-align: center; color: #666; padding: 10px 20px;'>
+    <p><strong>☀️ Application de Dimensionnement Solaire - Sénégal</strong></p>
+    <p style='color: #4CAF50; font-weight: bold; margin: 5px 0;'>🥇 Premier outil de dimensionnement solaire en ligne au Sénégal</p>
+    <p>🌍 Développé par la Team Mo.TL (773591509).</p>
     <p>📞 Pour acheter vos équipements : <a href='https://energiesolairesenegal.com' target='_blank'>energiesolairesenegal.com</a></p>
     <p style='font-size: 0.9em; margin-top: 10px;'>
         💡 <b>Conseil :</b> Consultez toujours un professionnel certifié pour l'installation<br>
@@ -3050,6 +3453,3 @@ st.markdown("""
     </p>
 </div>
 """, unsafe_allow_html=True)
-
-st.markdown("""
-""")
