@@ -35,6 +35,10 @@ st.set_page_config(
 # Valeurs par défaut pour éviter les erreurs si l’utilisateur n’a pas encore configuré tab1
 if 'consommation' not in st.session_state:
     st.session_state.consommation = 10.0  # kWh/jour par défaut
+# Valeur par défaut pour le widget de consommation journalière,
+# gérée exclusivement via Session State pour éviter les conflits avec `value=`.
+if 'conso_journaliere_input' not in st.session_state:
+    st.session_state['conso_journaliere_input'] = 10.0
 if 'choix' not in st.session_state:
     st.session_state.choix = {
         'type_batterie': 'Lithium',
@@ -188,6 +192,12 @@ POURCENTAGES_MAIN_OEUVRE_DEFAUT = {
 
 # Taux accessoires par défaut (en %)
 TAUX_ACCESSOIRES_DEFAUT = 15.0
+
+# Estimation de surface des panneaux (approximation)
+# Hypothèse réaliste: ~5 m² par kWc installé (modules 375–550W)
+SURFACE_PAR_KWC_M2 = 5.0
+# Marge d'implantation (espacement, orientation, accès)
+MARGE_IMPLANTATION_SURFACE_PCT = 10.0
 
 # Catalogue d'appareils par familles (puissances typiques)
 APPAREILS_FAMILLES = {
@@ -860,7 +870,6 @@ with tab1:
                 "Consommation électrique journalière (kWh/jour)",
                 min_value=0.5,
                 max_value=100.0,
-                value=st.session_state.get("conso_journaliere_input", 10.0),
                 step=0.5,
                 help="Estimez votre consommation quotidienne moyenne",
                 key="conso_journaliere_input"
@@ -1191,6 +1200,9 @@ with tab1:
                     panneau_nom, nb = equip["panneau"]
                     if panneau_nom:
                         st.info(f"**{nb} x {panneau_nom}**")
+                        surface_dim_m2 = (dim['puissance_panneaux'] / 1000.0) * SURFACE_PAR_KWC_M2
+                        surface_dim_m2 = surface_dim_m2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT / 100.0)
+                        st.caption(f"Surface panneaux approx.: ~{surface_dim_m2:.1f} m²")
                 
                 with col2:
                     st.metric(
@@ -1291,7 +1303,7 @@ with tab2:
         
         # Résumé du système
         st.markdown("### 📋 Résumé de votre installation")
-        col_info1, col_info2, col_info3 = st.columns(3)
+        col_info1, col_info2, col_info3, col_info4 = st.columns(4)
         
         with col_info1:
             st.metric("Consommation", f"{st.session_state.consommation:.1f} kWh/jour")
@@ -1299,6 +1311,9 @@ with tab2:
             st.metric("Puissance totale", f"{devis['puissance_totale']:.2f} kWc")
         with col_info3:
             st.metric("Type système", f"{st.session_state.choix['voltage']}V {st.session_state.choix['type_batterie']}")
+        with col_info4:
+            surface_m2_resume = devis['puissance_totale'] * SURFACE_PAR_KWC_M2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT/100.0)
+            st.metric("Surface panneaux approx.", f"{surface_m2_resume:.1f} m²")
         
         st.caption(f"🎯 Autonomie souhaitée: {(st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)}% • Estimée: {(st.session_state.autonomie_reelle_pct if 'autonomie_reelle_pct' in st.session_state else (st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)):.0f}%")
         
@@ -1441,6 +1456,7 @@ Autonomie souhaitée     : {(st.session_state.autonomie_pct if 'autonomie_pct' i
 Autonomie estimée       : {(st.session_state.autonomie_reelle_pct if 'autonomie_reelle_pct' in st.session_state else (st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)):.0f} %
 Couverte estimée        : {(st.session_state.production_solaire_kwh_j if 'production_solaire_kwh_j' in st.session_state else (st.session_state.consommation_couverte if 'consommation_couverte' in st.session_state else st.session_state.consommation)):.1f} kWh/jour
 Puissance installée     : {devis['puissance_totale']:.2f} kWc
+Surface panneaux approx. : {devis['puissance_totale'] * SURFACE_PAR_KWC_M2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT/100.0):.1f} m²
 Type de batterie        : {st.session_state.choix['type_batterie']}
 Voltage système         : {st.session_state.choix['voltage']}V
 Type onduleur           : {st.session_state.choix['type_onduleur']}
