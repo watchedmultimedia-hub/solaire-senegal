@@ -1,3 +1,6 @@
 streamlit
 pandas
 requests
+firebase-admin
+pyrebase4
+python-jose[cryptography]
