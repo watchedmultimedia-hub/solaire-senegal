@@ -1289,6 +1289,13 @@ with tab2:
             help="Sélectionnez la région où sera installé le système solaire. Le pourcentage de main d'œuvre sera appliqué automatiquement."
         )
         
+        # Nom du demandeur
+        nom_demandeur = st.text_input(
+            "👤 Nom du demandeur",
+            placeholder="Entrez le nom du demandeur du devis",
+            help="Le nom du demandeur apparaîtra sur le devis généré"
+        )
+        
         # Récupération du taux accessoires depuis les paramètres admin (extrait valeur numérique)
         taux_accessoires_admin_data = get_accessories_rate()
         if isinstance(taux_accessoires_admin_data, dict):
@@ -1448,6 +1455,11 @@ with tab2:
 ╔════════════════════════════════════════════════════════════════╗
 ║        DEVIS ESTIMATIF - INSTALLATION SOLAIRE SÉNÉGAL         ║
 ╚════════════════════════════════════════════════════════════════╝
+
+👤 INFORMATIONS CLIENT
+{'─' * 64}
+Nom du demandeur        : {nom_demandeur if nom_demandeur else "Non renseigné"}
+Région d'installation   : {region_selectionnee}
 
 📊 RÉSUMÉ DU SYSTÈME
 {'─' * 64}
@@ -2104,7 +2116,7 @@ if is_user_authenticated() and is_admin_user():
                     modified_prices = {}
                     
                     for nom_equipement, details in equipements.items():
-                        col1, col2 = st.columns([2, 1])
+                        col1, col2, col3 = st.columns([2, 1, 0.3])
                         with col1:
                             st.write(f"**{nom_equipement}**")
                         with col2:
@@ -2118,6 +2130,11 @@ if is_user_authenticated() and is_admin_user():
                                 key=f"price_{selected_category}_{nom_equipement}"
                             )
                             modified_prices[nom_equipement] = {**details, 'prix': new_price}
+                        with col3:
+                            # Bouton de suppression (sera traité après le formulaire)
+                            delete_key = f"delete_{selected_category}_{nom_equipement}"
+                            if st.form_submit_button("🗑️", key=delete_key, help=f"Supprimer {nom_equipement}"):
+                                st.session_state[f"confirm_delete_{selected_category}_{nom_equipement}"] = True
                     
                     if st.form_submit_button("💾 Sauvegarder les prix"):
                         # Mettre à jour les prix dans la structure complète
@@ -2131,6 +2148,35 @@ if is_user_authenticated() and is_admin_user():
                             st.rerun()
                         else:
                             st.error("❌ Erreur lors de la sauvegarde")
+                
+                # Gestion des suppressions d'articles (en dehors du formulaire)
+                for nom_equipement in equipements.keys():
+                    confirm_key = f"confirm_delete_{selected_category}_{nom_equipement}"
+                    if confirm_key in st.session_state and st.session_state[confirm_key]:
+                        st.warning(f"⚠️ Êtes-vous sûr de vouloir supprimer '{nom_equipement}' ?")
+                        col_confirm1, col_confirm2 = st.columns(2)
+                        
+                        with col_confirm1:
+                            if st.button(f"✅ Confirmer la suppression", key=f"confirm_yes_{selected_category}_{nom_equipement}"):
+                                # Supprimer l'article
+                                updated_prices = current_prices.copy()
+                                if selected_category in updated_prices and nom_equipement in updated_prices[selected_category]:
+                                    del updated_prices[selected_category][nom_equipement]
+                                    
+                                    if save_equipment_prices(updated_prices):
+                                        st.success(f"✅ Article '{nom_equipement}' supprimé avec succès!")
+                                        st.cache_data.clear()
+                                        # Nettoyer le state
+                                        del st.session_state[confirm_key]
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Erreur lors de la suppression")
+                        
+                        with col_confirm2:
+                            if st.button(f"❌ Annuler", key=f"confirm_no_{selected_category}_{nom_equipement}"):
+                                # Annuler la suppression
+                                del st.session_state[confirm_key]
+                                st.rerun()
             
             # Ajout d'un nouvel article
             st.markdown("---")
@@ -2936,7 +2982,7 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
     <p><b>☀️ Application de Dimensionnement Solaire - Sénégal</b></p>
-    <p>🌍Développé pour les Sonateliens souhaitant s'équiper de solaire.par M.T.</p>
+    <p>🌍Développé par la Team Mo.TL (773591509).</p>
     <p>📞 Pour acheter vos équipements : <a href='https://energiesolairesenegal.com' target='_blank'>energiesolairesenegal.com</a></p>
     <p style='font-size: 0.9em; margin-top: 10px;'>
         💡 <b>Conseil :</b> Consultez toujours un professionnel certifié pour l'installation<br>
