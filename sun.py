@@ -12,7 +12,7 @@ from firebase_config import (
     delete_quote, delete_client_request,
     is_admin_email, save_labor_percentages, get_labor_percentages, initialize_labor_percentages_in_firebase,
     clear_labor_percentages_cache, save_accessories_rate, get_accessories_rate, clear_accessories_rate_cache,
-    initialize_accessories_rate_in_firebase
+    initialize_accessories_rate_in_firebase, get_change_history
 )
 
 # Fonction pour obtenir les prix actuels (Firebase ou par défaut)
@@ -1941,7 +1941,113 @@ if is_user_authenticated() and is_admin_user():
         st.header("⚙️ Panneau d'Administration")
         
         # Sous-onglets admin
-        admin_tab1, admin_tab2, admin_tab3, admin_tab4 = st.tabs(["💰 Gestion des Prix", "🔧 Main d'œuvre", "📋 Devis Clients", "📞 Demandes Clients"])
+        admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5 = st.tabs(["💰 Gestion des Prix", "🔧 Main d'œuvre", "📋 Devis Clients", "📞 Demandes Clients", "🕘 Historique"])
+        
+        # Historique des modifications
+        with admin_tab5:
+            st.subheader("🕘 Historique des modifications")
+            st.caption("Consultez les actions d’administration enregistrées.")
+
+            # Libellés FR pour clarifier les types et objets
+            EVENT_TYPE_LABELS = {
+                "equipment_prices.update": "Prix des équipements — Mise à jour",
+                "equipment_prices.init": "Prix des équipements — Initialisation",
+                "labor_percentages.update": "Main d’œuvre — Mise à jour",
+                "labor_percentages.init": "Main d’œuvre — Initialisation",
+                "accessories_rate.update": "Taux accessoires — Mise à jour",
+                "accessories_rate.init": "Taux accessoires — Initialisation",
+                "quote.create": "Devis — Création",
+                "quote.delete": "Devis — Suppression",
+                "client_request.create": "Demande client — Création",
+                "client_request.update_status": "Demande client — Mise à jour du statut",
+                "client_request.delete": "Demande client — Suppression",
+            }
+            ITEM_ID_LABELS = {
+                "equipment_prices": "Prix des équipements",
+                "labor_percentages": "Pourcentages de main d’œuvre",
+                "accessories_rate": "Taux accessoires",
+                "quote": "Devis",
+                "client_request": "Demande client",
+                "global": "Global",
+            }
+
+            options_labels = ["Tous"] + list(EVENT_TYPE_LABELS.values())
+            inverse_event_map = {v: k for k, v in EVENT_TYPE_LABELS.items()}
+
+            colf1, colf2, colf3 = st.columns([2,2,1])
+            with colf1:
+                selected_label = st.selectbox(
+                    "Type d’évènement",
+                    options_labels,
+                    index=0,
+                    help="Filtre sur le type de changement"
+                )
+            with colf2:
+                email_filter = st.text_input("Filtrer par email (optionnel)", value="")
+            with colf3:
+                limit = st.number_input("Limite", min_value=5, max_value=200, value=50, step=5)
+            refresh = st.button("🔄 Recharger l'historique")
+
+            # Récupération
+            if refresh or True:
+                et = None if selected_label == "Tous" else inverse_event_map.get(selected_label)
+                email = email_filter.strip() or None
+                try:
+                    history = get_change_history(limit=int(limit), event_type=et, user_email=email)
+                except Exception as e:
+                    st.error(f"Erreur chargement historique: {e}")
+                    history = []
+
+                st.markdown(f"### {len(history)} évènement(s)")
+                if not history:
+                    st.info("Aucun évènement trouvé avec ces filtres.")
+                else:
+                    rows = []
+                    for h in history:
+                        ts = h.get('timestamp')
+                        try:
+                            ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if hasattr(ts, 'strftime') else str(ts)
+                        except Exception:
+                            ts_str = str(ts)
+                        ev = h.get('event_type','')
+                        obj = h.get('item_id','')
+                        rows.append({
+                            'Date': ts_str,
+                            'Type': EVENT_TYPE_LABELS.get(ev, ev),
+                            'Objet': ITEM_ID_LABELS.get(obj, obj),
+                            'Utilisateur': h.get('user_email',''),
+                            'Description': h.get('description',''),
+                        })
+                    try:
+                        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+                    except Exception:
+                        for r in rows:
+                            st.write(r)
+
+                    st.markdown("---")
+
+                    # Helper pour afficher JSON joliment
+                    def _show_json_block(titre, raw):
+                        st.write(titre + ":")
+                        if raw in (None, ""):
+                            st.caption("—")
+                            return
+                        try:
+                            import json
+                            obj = json.loads(raw)
+                            st.json(obj)
+                        except Exception:
+                            st.code(raw, language='json')
+
+                    for i, h in enumerate(history, start=1):
+                        ev = h.get('event_type','')
+                        obj = h.get('item_id','')
+                        with st.expander(f"Détail {i} • {EVENT_TYPE_LABELS.get(ev, ev)} • {ITEM_ID_LABELS.get(obj, obj)}"):
+                            st.write(f"Date: {rows[i-1]['Date']}")
+                            st.write(f"Utilisateur: {h.get('user_email','')}")
+                            st.write(f"Description: {h.get('description','')}")
+                            _show_json_block("Avant", h.get('before', ''))
+                            _show_json_block("Après", h.get('after', ''))
         
         with admin_tab1:
             st.subheader("💰 Gestion des Prix des Équipements")
@@ -2808,10 +2914,7 @@ if is_user_authenticated() and is_admin_user():
                 st.info("📭 Aucune demande client pour le moment")
                 st.markdown("Les demandes apparaîtront ici quand les clients utiliseront le formulaire de contact dans l'onglet Dimensionnement.")
             
-            # Historique des modifications (optionnel)
-            with st.expander("📋 Historique des modifications"):
-                st.markdown("*Fonctionnalité à venir : historique des changements de pourcentages*")
-                st.caption("Cette section affichera l'historique des modifications des pourcentages de main d'œuvre.")
+            # Historique déplacé dans l'onglet Admin → 🕘 Historique
 
 st.markdown("---")
 st.markdown("""
