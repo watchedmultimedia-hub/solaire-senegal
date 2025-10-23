@@ -4,6 +4,8 @@ import json
 import re
 from urllib.parse import quote
 import pandas as pd
+import io
+from docx import Document
 import math
 from firebase_config import (
     login_user, logout_user, is_user_authenticated, is_admin_user,
@@ -15,15 +17,21 @@ from firebase_config import (
     initialize_accessories_rate_in_firebase, get_change_history
 )
 
-# Fonction pour obtenir les prix actuels (Firebase ou par défaut)
+# Fonction pour obtenir les prix actuels (Firebase uniquement)
 @st.cache_data(ttl=3600)  # Cache pendant 1 heure
 def get_current_prices():
-    """Obtient les prix actuels depuis Firebase ou utilise les prix par défaut"""
+    """Obtient les prix actuels depuis Firebase uniquement"""
     firebase_prices = get_equipment_prices()
     if firebase_prices:
         return firebase_prices
     else:
-        return PRIX_EQUIPEMENTS
+        # Retourne une structure vide si Firebase n'a pas de données
+        return {
+            "panneaux": {},
+            "batteries": {},
+            "onduleurs": {},
+            "regulateurs": {}
+        }
 
 def clear_prices_cache():
     """Vide le cache des prix pour forcer le rechargement"""
@@ -1382,8 +1390,12 @@ with tab2:
         if equip_actifs and equip_actifs.get('panneau'):
             panneau_nom, nb = equip_actifs['panneau']
             if panneau_nom and nb > 0:
-                puissance_unitaire = PRIX_EQUIPEMENTS['panneaux'][panneau_nom]['puissance']
-                puissance_totale_w = puissance_unitaire * nb
+                current_prices = get_current_prices()
+                if current_prices and 'panneaux' in current_prices and panneau_nom in current_prices['panneaux']:
+                    puissance_unitaire = current_prices['panneaux'][panneau_nom]['puissance']
+                    puissance_totale_w = puissance_unitaire * nb
+                else:
+                    puissance_totale_w = 0
                 # 5h d'ensoleillement/jour avec pertes ~25%
                 prod_kwh_j = (puissance_totale_w / 1000.0) * 5.0 * 0.75
                 conso_totale = st.session_state.consommation if 'consommation' in st.session_state else 10.0
@@ -1513,39 +1525,51 @@ Pour plus d'informations : energiesolairesenegal.com
 {'═' * 64}
 """
             
-            # Génération du devis Word (RTF)
-            def _to_rtf(text: str) -> str:
-                safe = text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
-                safe = safe.replace("\n", "\\line\n")
-                return "{\\rtf1\\ansi\n" + safe + "\n}"
-            rtf_text = _to_rtf(devis_text)
+            # Génération du devis Word (.docx)
+            # Génération du devis Word (.docx)
+            doc = Document()
+            for line in devis_text.splitlines():
+                doc.add_paragraph(line)
+            docx_buffer = io.BytesIO()
+            doc.save(docx_buffer)
+            docx_buffer.seek(0)
             st.download_button(
-                "📥 Télécharger le devis (Word)",
-                rtf_text,
-                file_name=f"devis_solaire_{st.session_state.choix['voltage']}V.rtf",
-                mime="application/rtf",
+                "📥 Télécharger le devis (Word .docx)",
+                docx_buffer.getvalue(),
+                file_name=f"devis_solaire_{st.session_state.choix['voltage']}V.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True
             )
         
         with col_dl2:
-            # Génération Excel (HTML compatible .xls)
-            rows_html = "".join([
-                f"<tr><td>{item['item']}</td><td>{item['quantite']}</td><td>{item['prix_unitaire']}</td><td>{item['sous_total']}</td></tr>" for item in devis["details"]
+            # Génération Excel (.xlsx)
+            df = pd.DataFrame([
+                {
+                    "Équipement": item["item"],
+                    "Quantité": item["quantite"],
+                    "Prix unitaire (FCFA)": item["prix_unitaire"],
+                    "Sous-total (FCFA)": item["sous_total"],
+                }
+                for item in devis["details"]
             ])
-            excel_html = f"""
-            <html><head><meta charset='utf-8'></head><body>
-            <table border='1'>
-            <tr><th>Équipement</th><th>Quantité</th><th>Prix unitaire (FCFA)</th><th>Sous-total (FCFA)</th></tr>
-            {rows_html}
-            <tr><td><b>TOTAL</b></td><td></td><td></td><td><b>{devis['total']}</b></td></tr>
-            </table>
-            </body></html>
-            """
+            total_row = pd.DataFrame([
+                {
+                    "Équipement": "TOTAL",
+                    "Quantité": "",
+                    "Prix unitaire (FCFA)": "",
+                    "Sous-total (FCFA)": devis["total"],
+                }
+            ])
+            df = pd.concat([df, total_row], ignore_index=True)
+            xlsx_buffer = io.BytesIO()
+            with pd.ExcelWriter(xlsx_buffer, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name="Devis")
+            xlsx_buffer.seek(0)
             st.download_button(
-                "📊 Télécharger (Excel)",
-                excel_html,
-                file_name=f"devis_solaire_{st.session_state.choix['voltage']}V.xls",
-                mime="application/vnd.ms-excel",
+                "📊 Télécharger (Excel .xlsx)",
+                xlsx_buffer.getvalue(),
+                file_name=f"devis_solaire_{st.session_state.choix['voltage']}V.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
         
@@ -1778,11 +1802,16 @@ with tab3:
             if not auto_reelle_ctx and equip_actifs_ctx and equip_actifs_ctx.get('panneau'):
                 pn_ctx, nb_ctx = equip_actifs_ctx['panneau']
                 if pn_ctx and nb_ctx > 0:
-                    p_unit_ctx = PRIX_EQUIPEMENTS['panneaux'][pn_ctx]['puissance']
-                    p_tot_ctx = p_unit_ctx * nb_ctx
-                    prod_kwh_j_ctx = (p_tot_ctx / 1000.0) * 5.0 * 0.75
-                    conso_totale_ctx = st.session_state.consommation if 'consommation' in st.session_state else 10.0
-                    auto_reelle_ctx = min(100.0, (prod_kwh_j_ctx / conso_totale_ctx) * 100.0)
+                    current_prices_ctx = get_current_prices()
+                    if current_prices_ctx and 'panneaux' in current_prices_ctx and pn_ctx in current_prices_ctx['panneaux']:
+                        p_unit_ctx = current_prices_ctx['panneaux'][pn_ctx]['puissance']
+                        p_tot_ctx = p_unit_ctx * nb_ctx
+                        prod_kwh_j_ctx = (p_tot_ctx / 1000.0) * 5.0 * 0.75
+                        conso_totale_ctx = st.session_state.consommation if 'consommation' in st.session_state else 10.0
+                        auto_reelle_ctx = min(100.0, (prod_kwh_j_ctx / conso_totale_ctx) * 100.0)
+                    else:
+                        prod_kwh_j_ctx = 0.0
+                        auto_reelle_ctx = 0.0
             prod_kwh_j_ctx = prod_kwh_j_ctx if prod_kwh_j_ctx > 0 else (st.session_state.production_solaire_kwh_j if 'production_solaire_kwh_j' in st.session_state else 0.0)
             auto_reelle_ctx = auto_reelle_ctx if auto_reelle_ctx is not None else (st.session_state.autonomie_reelle_pct if 'autonomie_reelle_pct' in st.session_state else (st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100))
 
@@ -1850,7 +1879,10 @@ L'utilisateur a dimensionné une installation avec:
                 try:
                     pn = equip_opt['panneau'][0]
                     nbp = equip_opt['panneau'][1]
-                    punit = PRIX_EQUIPEMENTS['panneaux'].get(pn, {}).get('puissance', 0)
+                    current_prices_opt = get_current_prices()
+                    punit = 0
+                    if current_prices_opt and 'panneaux' in current_prices_opt and pn in current_prices_opt['panneaux']:
+                        punit = current_prices_opt['panneaux'][pn].get('puissance', 0)
                     prod_opt_kwh_j = (punit * nbp / 1000.0) * 5.0 * 0.75 if (pn and nbp > 0 and punit > 0) else 0.0
                     conso_tot = st.session_state.consommation if 'consommation' in st.session_state else 10.0
                     auto_opt_pct = min(100.0, (prod_opt_kwh_j / conso_tot) * 100.0) if conso_tot > 0 else 0.0
@@ -2094,33 +2126,53 @@ if is_user_authenticated() and is_admin_user():
             with col_info:
                 st.caption("Utilisez ce bouton si le chargement des prix semble lent ou s'il affiche des valeurs obsolètes.")
             
-            # Charger les prix actuels depuis Firebase
-            current_prices = get_equipment_prices()
-            if current_prices:
+            # Charger les prix actuels depuis Firebase (sans fusion avec les valeurs par défaut)
+            current_prices = get_current_prices()
+            if current_prices and any(current_prices.get(cat) for cat in ["panneaux", "batteries", "onduleurs", "regulateurs"]):
                 st.success("✅ Prix chargés depuis Firebase")
             else:
-                st.info("ℹ️ Aucun prix personnalisé trouvé. Utilisation des prix par défaut.")
-                current_prices = PRIX_EQUIPEMENTS
+                st.warning("ℹ️ Aucun prix disponible dans Firebase.")
+                col_reset, col_clear = st.columns([1, 1])
+                with col_reset:
+                    if st.button("Importer les prix par défaut"):
+                        if save_equipment_prices(PRIX_EQUIPEMENTS):
+                            st.success("✅ Prix par défaut importés dans Firebase.")
+                            clear_prices_cache()
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("❌ Erreur lors de l'import des prix par défaut")
+                with col_clear:
+                    if st.button("Vider tous les prix"):
+                        if save_equipment_prices({"panneaux": {}, "batteries": {}, "onduleurs": {}, "regulateurs": {}}):
+                            st.success("✅ Tous les prix ont été vidés.")
+                            clear_prices_cache()
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("❌ Erreur lors du vidage des prix")
             
             # Interface de modification des prix
             st.markdown("### 🔧 Modifier les prix")
             
-            # Sélection de catégorie
-            categories = list(PRIX_EQUIPEMENTS.keys())
+            # Sélection de catégorie (liste fixe et filtrée)
+            categories = ["panneaux", "batteries", "onduleurs", "regulateurs"]
             selected_category = st.selectbox("Choisir une catégorie", categories)
             
             if selected_category:
                 st.markdown(f"#### {selected_category.title()}")
                 
-                # Afficher les équipements de la catégorie (union des valeurs par défaut et Firebase)
-                equipements = {**PRIX_EQUIPEMENTS[selected_category], **current_prices.get(selected_category, {})}
+                # Afficher les équipements de la catégorie (Firebase uniquement)
+                equipements = current_prices.get(selected_category, {})
+                if not isinstance(equipements, dict):
+                    equipements = {}
                 
                 # Créer un formulaire pour modifier les prix
                 with st.form(f"form_{selected_category}"):
                     modified_prices = {}
                     
                     for nom_equipement, details in equipements.items():
-                        col1, col2, col3 = st.columns([2, 1, 0.3])
+                        col1, col2 = st.columns([2, 1])
                         with col1:
                             st.write(f"**{nom_equipement}**")
                         with col2:
@@ -2134,11 +2186,6 @@ if is_user_authenticated() and is_admin_user():
                                 key=f"price_{selected_category}_{nom_equipement}"
                             )
                             modified_prices[nom_equipement] = {**details, 'prix': new_price}
-                        with col3:
-                            # Bouton de suppression (sera traité après le formulaire)
-                            delete_key = f"delete_{selected_category}_{nom_equipement}"
-                            if st.form_submit_button("🗑️", key=delete_key, help=f"Supprimer {nom_equipement}"):
-                                st.session_state[f"confirm_delete_{selected_category}_{nom_equipement}"] = True
                     
                     if st.form_submit_button("💾 Sauvegarder les prix"):
                         # Mettre à jour les prix dans la structure complète
@@ -2155,36 +2202,41 @@ if is_user_authenticated() and is_admin_user():
                         else:
                             st.error("❌ Erreur lors de la sauvegarde")
                 
-                # Gestion des suppressions d'articles (en dehors du formulaire)
-                for nom_equipement in equipements.keys():
-                    confirm_key = f"confirm_delete_{selected_category}_{nom_equipement}"
-                    if confirm_key in st.session_state and st.session_state[confirm_key]:
-                        st.warning(f"⚠️ Êtes-vous sûr de vouloir supprimer '{nom_equipement}' ?")
-                        col_confirm1, col_confirm2 = st.columns(2)
+                # Section séparée pour la suppression d'équipements
+                st.markdown("---")
+                st.markdown("#### 🗑️ Supprimer un équipement")
+                
+                if equipements:
+                    # Sélection de l'équipement à supprimer
+                    equipement_a_supprimer = st.selectbox(
+                        "Choisir l'équipement à supprimer :",
+                        options=[""] + list(equipements.keys()),
+                        key=f"select_delete_{selected_category}"
+                    )
+                    
+                    if equipement_a_supprimer:
+                        col1, col2 = st.columns([1, 1])
                         
-                        with col_confirm1:
-                            if st.button(f"✅ Confirmer la suppression", key=f"confirm_yes_{selected_category}_{nom_equipement}"):
+                        with col1:
+                            if st.button(f"🗑️ Supprimer '{equipement_a_supprimer}'", key=f"delete_btn_{selected_category}"):
                                 # Supprimer l'article
                                 updated_prices = current_prices.copy()
-                                if selected_category in updated_prices and nom_equipement in updated_prices[selected_category]:
-                                    del updated_prices[selected_category][nom_equipement]
+                                if selected_category in updated_prices and equipement_a_supprimer in updated_prices[selected_category]:
+                                    del updated_prices[selected_category][equipement_a_supprimer]
                                     
                                     if save_equipment_prices(updated_prices):
-                                        st.success(f"✅ Article '{nom_equipement}' supprimé avec succès!")
+                                        st.success(f"✅ Article '{equipement_a_supprimer}' supprimé avec succès!")
                                         # Vider le cache spécifique des prix
                                         clear_prices_cache()
                                         st.cache_data.clear()
-                                        # Nettoyer le state
-                                        del st.session_state[confirm_key]
                                         st.rerun()
                                     else:
                                         st.error("❌ Erreur lors de la suppression")
                         
-                        with col_confirm2:
-                            if st.button(f"❌ Annuler", key=f"confirm_no_{selected_category}_{nom_equipement}"):
-                                # Annuler la suppression
-                                del st.session_state[confirm_key]
-                                st.rerun()
+                        with col2:
+                            st.info(f"Prix actuel : {equipements[equipement_a_supprimer]['prix']:,} FCFA")
+                else:
+                    st.info("Aucun équipement disponible dans cette catégorie.")
             
             # Ajout d'un nouvel article
             st.markdown("---")
