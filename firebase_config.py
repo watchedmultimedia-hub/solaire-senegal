@@ -113,13 +113,31 @@ def is_admin_email(email: str) -> bool:
     except Exception:
         return False
 
+
 def save_quote_to_firebase(quote_data):
     """Sauvegarde un devis dans Firestore"""
     try:
         db = init_firebase_admin()
         if db:
             doc_ref = db.collection('devis').add(quote_data)
-            return doc_ref[1].id
+            new_id = None
+            try:
+                new_id = doc_ref[1].id
+            except Exception:
+                pass
+            # Journalisation de création de devis (after seulement)
+            try:
+                log_change(
+                    event_type='quote.create',
+                    item_id=new_id,
+                    description='Création d\'un devis',
+                    before=None,
+                    after={**quote_data, 'id': new_id} if isinstance(quote_data, dict) else quote_data,
+                    metadata={'collection': 'devis'}
+                )
+            except Exception:
+                pass
+            return new_id
     except Exception as e:
         st.error(f"Erreur sauvegarde devis: {e}")
         return None
@@ -136,12 +154,30 @@ def get_all_quotes():
         st.error(f"Erreur récupération devis: {e}")
         return []
 
+
 def save_equipment_prices(prices_data):
     """Sauvegarde les prix des équipements dans Firestore"""
     try:
         db = init_firebase_admin()
         if db:
-            db.collection('config').document('equipment_prices').set(prices_data)
+            doc_ref = db.collection('config').document('equipment_prices')
+            try:
+                snap = doc_ref.get()
+                before_doc = snap.to_dict() if snap.exists else None
+            except Exception:
+                before_doc = None
+            doc_ref.set(prices_data)
+            try:
+                log_change(
+                    event_type='equipment_prices.update',
+                    item_id='equipment_prices',
+                    description='Mise à jour des prix équipements',
+                    before=before_doc,
+                    after=prices_data,
+                    metadata={'collection': 'config'}
+                )
+            except Exception:
+                pass
             return True
     except Exception as e:
         st.error(f"Erreur sauvegarde prix: {e}")
@@ -160,6 +196,7 @@ def get_equipment_prices():
         st.error(f"Erreur récupération prix: {e}")
     return None
 
+
 def save_client_request(request_data):
     """Sauvegarde une demande client dans Firestore"""
     try:
@@ -171,7 +208,24 @@ def save_client_request(request_data):
             request_data['admin_notes'] = ''
             
             doc_ref = db.collection('demandes_clients').add(request_data)
-            return doc_ref[1].id
+            new_id = None
+            try:
+                new_id = doc_ref[1].id
+            except Exception:
+                pass
+            # Journaliser création de demande (after seulement)
+            try:
+                log_change(
+                    event_type='client_request.create',
+                    item_id=new_id,
+                    description='Création d\'une demande client',
+                    before=None,
+                    after={**request_data, 'id': new_id} if isinstance(request_data, dict) else request_data,
+                    metadata={'collection': 'demandes_clients'}
+                )
+            except Exception:
+                pass
+            return new_id
     except Exception as e:
         st.error(f"Erreur sauvegarde demande: {e}")
         return None
@@ -188,20 +242,44 @@ def get_all_client_requests():
         st.error(f"Erreur récupération demandes: {e}")
         return []
 
+
 def update_client_request_status(request_id, status, admin_notes=""):
     """Met à jour le statut d'une demande client"""
     try:
         db = init_firebase_admin()
         if db:
-            db.collection('demandes_clients').document(request_id).update({
+            doc_ref = db.collection('demandes_clients').document(request_id)
+            try:
+                snap_before = doc_ref.get()
+                before_doc = snap_before.to_dict() if snap_before.exists else None
+            except Exception:
+                before_doc = None
+            doc_ref.update({
                 'status': status,
                 'admin_notes': admin_notes,
                 'last_updated': firestore.SERVER_TIMESTAMP
             })
+            try:
+                snap_after = doc_ref.get()
+                after_doc = snap_after.to_dict() if snap_after.exists else {'status': status, 'admin_notes': admin_notes}
+            except Exception:
+                after_doc = {'status': status, 'admin_notes': admin_notes}
+            try:
+                log_change(
+                    event_type='client_request.update',
+                    item_id=request_id,
+                    description='Mise à jour de la demande client',
+                    before=before_doc,
+                    after=after_doc,
+                    metadata={'collection': 'demandes_clients'}
+                )
+            except Exception:
+                pass
             return True
     except Exception as e:
         st.error(f"Erreur mise à jour demande: {e}")
         return False
+
 
 def initialize_equipment_prices_in_firebase(prices_data):
     """Initialise les prix des équipements dans Firebase (première fois)"""
@@ -209,12 +287,24 @@ def initialize_equipment_prices_in_firebase(prices_data):
         db = init_firebase_admin()
         if db:
             # Vérifier si les prix existent déjà
-            doc = db.collection('config').document('equipment_prices').get()
+            doc_ref = db.collection('config').document('equipment_prices')
+            doc = doc_ref.get()
             if not doc.exists:
                 # Ajouter timestamp d'initialisation
                 prices_data['_initialized_at'] = firestore.SERVER_TIMESTAMP
                 prices_data['_version'] = '1.0'
-                db.collection('config').document('equipment_prices').set(prices_data)
+                doc_ref.set(prices_data)
+                try:
+                    log_change(
+                        event_type='equipment_prices.init',
+                        item_id='equipment_prices',
+                        description='Initialisation des prix équipements',
+                        before=None,
+                        after=prices_data,
+                        metadata={'collection': 'config'}
+                    )
+                except Exception:
+                    pass
                 return True, "Prices initialized successfully"
             else:
                 return False, "Prices already exist in database"
@@ -222,34 +312,88 @@ def initialize_equipment_prices_in_firebase(prices_data):
         st.error(f"Erreur initialisation prix: {e}")
         return False, f"Error: {e}"
 
+
 def delete_quote(quote_id: str) -> bool:
     """Supprime un devis à partir de son ID Firestore"""
     try:
         db = init_firebase_admin()
         if db and quote_id:
-            db.collection('devis').document(quote_id).delete()
+            doc_ref = db.collection('devis').document(quote_id)
+            try:
+                snap = doc_ref.get()
+                before_doc = snap.to_dict() if snap.exists else None
+            except Exception:
+                before_doc = None
+            doc_ref.delete()
+            try:
+                log_change(
+                    event_type='quote.delete',
+                    item_id=quote_id,
+                    description='Suppression d\'un devis',
+                    before=before_doc,
+                    after=None,
+                    metadata={'collection': 'devis'}
+                )
+            except Exception:
+                pass
             return True
     except Exception as e:
         st.error(f"Erreur suppression devis: {e}")
     return False
+
 
 def delete_client_request(request_id: str) -> bool:
     """Supprime une demande client à partir de son ID Firestore"""
     try:
         db = init_firebase_admin()
         if db and request_id:
-            db.collection('demandes_clients').document(request_id).delete()
+            doc_ref = db.collection('demandes_clients').document(request_id)
+            try:
+                snap = doc_ref.get()
+                before_doc = snap.to_dict() if snap.exists else None
+            except Exception:
+                before_doc = None
+            doc_ref.delete()
+            try:
+                log_change(
+                    event_type='client_request.delete',
+                    item_id=request_id,
+                    description='Suppression d\'une demande client',
+                    before=before_doc,
+                    after=None,
+                    metadata={'collection': 'demandes_clients'}
+                )
+            except Exception:
+                pass
             return True
     except Exception as e:
         st.error(f"Erreur suppression demande: {e}")
     return False
+
 
 def save_labor_percentages(percentages_data):
     """Sauvegarde les pourcentages de main d'œuvre par région dans Firestore"""
     try:
         db = init_firebase_admin()
         if db:
-            db.collection('config').document('labor_percentages').set(percentages_data)
+            doc_ref = db.collection('config').document('labor_percentages')
+            try:
+                snap = doc_ref.get()
+                before_doc = snap.to_dict() if snap.exists else None
+            except Exception:
+                before_doc = None
+            doc_ref.set(percentages_data)
+            try:
+                log_change(
+                    event_type='labor_percentages.update',
+                    item_id='labor_percentages',
+                    description='Mise à jour des pourcentages main d\'œuvre',
+                    before=before_doc,
+                    after=percentages_data,
+                    metadata={'collection': 'config'}
+                )
+            except Exception:
+                pass
             return True
     except Exception as e:
         st.error(f"Erreur sauvegarde pourcentages main d'œuvre: {e}")
@@ -268,16 +412,35 @@ def get_labor_percentages():
         st.error(f"Erreur récupération pourcentages main d'œuvre: {e}")
     return None
 
+
 def clear_labor_percentages_cache():
     """Vide le cache des pourcentages de main d'œuvre"""
     get_labor_percentages.clear()
+
 
 def save_accessories_rate(rate_data):
     """Sauvegarde le taux d'accessoires dans Firestore"""
     try:
         db = init_firebase_admin()
         if db:
-            db.collection('config').document('accessories_rate').set(rate_data)
+            doc_ref = db.collection('config').document('accessories_rate')
+            try:
+                snap = doc_ref.get()
+                before_doc = snap.to_dict() if snap.exists else None
+            except Exception:
+                before_doc = None
+            doc_ref.set(rate_data)
+            try:
+                log_change(
+                    event_type='accessories_rate.update',
+                    item_id='accessories_rate',
+                    description='Mise à jour du taux accessoires',
+                    before=before_doc,
+                    after=rate_data,
+                    metadata={'collection': 'config'}
+                )
+            except Exception:
+                pass
             return True
     except Exception as e:
         st.error(f"Erreur sauvegarde taux accessoires: {e}")
@@ -296,9 +459,11 @@ def get_accessories_rate():
         st.error(f"Erreur récupération taux accessoires: {e}")
     return None
 
+
 def clear_accessories_rate_cache():
     """Vide le cache du taux d'accessoires"""
     get_accessories_rate.clear()
+
 
 def initialize_accessories_rate_in_firebase(rate_data):
     """Initialise le taux d'accessoires dans Firebase (première fois)"""
@@ -306,12 +471,24 @@ def initialize_accessories_rate_in_firebase(rate_data):
         db = init_firebase_admin()
         if db:
             # Vérifier si le taux existe déjà
-            doc = db.collection('config').document('accessories_rate').get()
+            doc_ref = db.collection('config').document('accessories_rate')
+            doc = doc_ref.get()
             if not doc.exists:
                 # Ajouter timestamp d'initialisation
                 rate_data['_initialized_at'] = firestore.SERVER_TIMESTAMP
                 rate_data['_version'] = '1.0'
-                db.collection('config').document('accessories_rate').set(rate_data)
+                doc_ref.set(rate_data)
+                try:
+                    log_change(
+                        event_type='accessories_rate.init',
+                        item_id='accessories_rate',
+                        description='Initialisation du taux accessoires',
+                        before=None,
+                        after=rate_data,
+                        metadata={'collection': 'config'}
+                    )
+                except Exception:
+                    pass
                 return True, "Accessories rate initialized successfully"
             else:
                 return False, "Accessories rate already exists in database"
@@ -319,21 +496,110 @@ def initialize_accessories_rate_in_firebase(rate_data):
         st.error(f"Erreur initialisation taux accessoires: {e}")
         return False, f"Error: {e}"
 
+
 def initialize_labor_percentages_in_firebase(percentages_data):
     """Initialise les pourcentages de main d'œuvre dans Firebase (première fois)"""
     try:
         db = init_firebase_admin()
         if db:
             # Vérifier si les pourcentages existent déjà
-            doc = db.collection('config').document('labor_percentages').get()
+            doc_ref = db.collection('config').document('labor_percentages')
+            doc = doc_ref.get()
             if not doc.exists:
                 # Ajouter timestamp d'initialisation
                 percentages_data['_initialized_at'] = firestore.SERVER_TIMESTAMP
                 percentages_data['_version'] = '1.0'
-                db.collection('config').document('labor_percentages').set(percentages_data)
+                doc_ref.set(percentages_data)
+                try:
+                    log_change(
+                        event_type='labor_percentages.init',
+                        item_id='labor_percentages',
+                        description='Initialisation des pourcentages main d\'œuvre',
+                        before=None,
+                        after=percentages_data,
+                        metadata={'collection': 'config'}
+                    )
+                except Exception:
+                    pass
                 return True, "Labor percentages initialized successfully"
             else:
                 return False, "Labor percentages already exist in database"
     except Exception as e:
         st.error(f"Erreur initialisation pourcentages main d'œuvre: {e}")
         return False, f"Error: {e}"
+
+# --- Utilitaires d'audit / historique des modifications ---
+
+def _safe_json(value, max_len: int = 4000):
+    """Convertit une valeur en JSON (ou str) et tronque si trop longue."""
+    if value is None:
+        return None
+    try:
+        s = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        try:
+            s = str(value)
+        except Exception:
+            s = None
+    if s is None:
+        return None
+    if len(s) > max_len:
+        return s[:max_len] + "… (tronqué)"
+    return s
+
+
+def log_change(event_type: str, item_id: str | None = None, description: str | None = None,
+               before=None, after=None, metadata: dict | None = None, user_email: str | None = None) -> bool:
+    """Enregistre un évènement d'audit dans Firestore (collection 'change_logs')."""
+    try:
+        db = init_firebase_admin()
+        if not db:
+            return False
+        doc = {
+            'event_type': event_type,
+            'item_id': item_id or 'global',
+            'description': description or '',
+            'before': _safe_json(before),
+            'after': _safe_json(after),
+            'metadata': metadata or {},
+            'user_email': user_email or st.session_state.get('user_email'),
+            'timestamp': firestore.SERVER_TIMESTAMP,
+        }
+        db.collection('change_logs').add(doc)
+        return True
+    except Exception as e:
+        st.error(f"Erreur log_change: {e}")
+        return False
+
+
+def get_change_history(limit: int = 100, event_type: str | None = None, user_email: str | None = None):
+    """Récupère l'historique des modifications, trié par date décroissante.
+    Peut filtrer par type d'évènement et/ou email utilisateur.
+    """
+    try:
+        db = init_firebase_admin()
+        if not db:
+            return []
+        q = db.collection('change_logs')
+        # Filtres optionnels
+        if event_type:
+            q = q.where('event_type', '==', event_type)
+        if user_email:
+            q = q.where('user_email', '==', user_email)
+        # Tri par timestamp desc (fallback si index manquant)
+        try:
+            q = q.order_by('timestamp', direction=firestore.Query.DESCENDING)
+            docs = q.limit(max(1, int(limit))).stream()
+            return [{'id': d.id, **d.to_dict()} for d in docs]
+        except Exception:
+            docs = q.limit(max(1, int(limit))).stream()
+            items = [{'id': d.id, **d.to_dict()} for d in docs]
+            # Tri côté client si possible
+            try:
+                items.sort(key=lambda x: x.get('timestamp'), reverse=True)
+            except Exception:
+                pass
+            return items
+    except Exception as e:
+        st.error(f"Erreur get_change_history: {e}")
+        return []
