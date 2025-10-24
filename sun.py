@@ -167,6 +167,14 @@ PRIX_EQUIPEMENTS = {
         "Online 10KVA 3/3 HF": {"prix": 3157902, "puissance": 10000, "voltage": 48, "type": "Online Tri", "phase": "triphase"},
         "Online 20KVA 3/3 HF": {"prix": 4565499, "puissance": 20000, "voltage": 48, "type": "Online Tri", "phase": "triphase"},
         "Online 30KVA 3/3 HF": {"prix": 5974410, "puissance": 30000, "voltage": 48, "type": "Online Tri", "phase": "triphase"},
+        
+        # Onduleurs Haute Tension (>180V) pour installations industrielles
+        "HV Hybride 10KVA 200V": {"prix": 2500000, "puissance": 10000, "voltage": 200, "type": "Hybride", "mppt": "150A", "phase": "monophase"},
+        "HV Hybride 15KVA 300V": {"prix": 3500000, "puissance": 15000, "voltage": 300, "type": "Hybride", "mppt": "200A", "phase": "monophase"},
+        "HV Online 20KVA 400V": {"prix": 4500000, "puissance": 20000, "voltage": 400, "type": "Online", "phase": "monophase"},
+        "HV Online 30KVA 400V": {"prix": 6500000, "puissance": 30000, "voltage": 400, "type": "Online", "phase": "monophase"},
+        "HV Online 50KVA 600V Tri": {"prix": 8500000, "puissance": 50000, "voltage": 600, "type": "Online Tri", "phase": "triphase"},
+        "HV Online 100KVA 800V Tri": {"prix": 15000000, "puissance": 100000, "voltage": 800, "type": "Online Tri", "phase": "triphase"},
     },
     "regulateurs": {
         # Régulateurs PWM
@@ -565,6 +573,12 @@ def get_pvgis_monthly_psh(lat, lon, optimalangles=True, angle=None, aspect=None,
 
 # Fonction de dimensionnement améliorée
 def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltage=12, type_batterie="AGM", part_nuit=0.5):
+    # Conversion du voltage pour les calculs
+    if voltage == "High Voltage":
+        # Pour High Voltage, utiliser une valeur représentative (400V par exemple)
+        voltage_numeric = 400
+    else:
+        voltage_numeric = int(voltage)
     # Coefficients issus des secrets (avec valeurs par défaut en repli)
     try:
         panel_loss_factor = float(st.secrets["formulas"]["panel_loss_factor"])
@@ -611,7 +625,7 @@ def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltag
     profondeur_decharge = decharge_max.get(type_batterie, 0.7)
     efficacite_batterie = efficacite_batterie_map.get(type_batterie, 0.85 if type_batterie in ("Plomb", "AGM", "GEL") else 0.93)
     consommation_nocturne = consommation_journaliere * max(0.1, min(part_nuit/100.0, 1.0))
-    capacite_batterie = (consommation_nocturne * autonomie_jours * 1000) / (voltage * max(profondeur_decharge, 0.01) * max(efficacite_batterie, 0.01))
+    capacite_batterie = (consommation_nocturne * autonomie_jours * 1000) / (voltage_numeric * max(profondeur_decharge, 0.01) * max(efficacite_batterie, 0.01))
 
     # Puissance onduleur (fraction de la conso journalière)
     puissance_onduleur = consommation_journaliere * inverter_peak_fraction * 1000  # en W
@@ -635,6 +649,11 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     # Supporte l'absence de type_regulateur (ex: onduleur Hybride)
     type_regulateur = choix_utilisateur.get("type_regulateur", "MPPT")
     voltage_systeme = choix_utilisateur["voltage"]
+    # Conversion du voltage pour les calculs numériques
+    if voltage_systeme == "High Voltage":
+        voltage_systeme_numeric = 400  # Valeur représentative pour High Voltage
+    else:
+        voltage_systeme_numeric = int(voltage_systeme)
     phase_type = choix_utilisateur.get("phase_type", "monophase")
     
     # Sélection panneaux — choisir le module qui minimise le nombre de panneaux
@@ -661,8 +680,16 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     # Sélection batterie selon le type choisi
     batterie_select = None
     nb_batteries = 0
-    batteries_filtrees = {k: v for k, v in prix_equipements["batteries"].items() 
-                         if v["type"] == type_batterie and v["voltage"] == voltage_systeme}
+    
+    # Filtrage des batteries selon le voltage système
+    if voltage_systeme == "High Voltage":
+        # Pour High Voltage, prendre les batteries Lithium HV avec voltage > 48V
+        batteries_filtrees = {k: v for k, v in prix_equipements["batteries"].items() 
+                             if v["type"] == "Lithium HV" and v["voltage"] > 48}
+    else:
+        # Pour les voltages standards, filtrage exact
+        batteries_filtrees = {k: v for k, v in prix_equipements["batteries"].items() 
+                             if v["type"] == type_batterie and v["voltage"] == voltage_systeme}
     
     if batteries_filtrees:
         for nom, specs in sorted(batteries_filtrees.items(), key=lambda x: x[1]["capacite"]):
@@ -681,8 +708,16 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     # Sélection onduleur selon le type choisi avec couplage si nécessaire
     onduleur_select = None
     nb_onduleurs = 1
-    onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
-                        if type_onduleur == v["type"] and v["voltage"] == voltage_systeme and v.get("phase", "monophase") == phase_type}
+    
+    # Filtrage des onduleurs selon le voltage système
+    if voltage_systeme == "High Voltage":
+        # Pour High Voltage, prendre les onduleurs avec voltage > 180V
+        onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
+                            if type_onduleur == v["type"] and v["voltage"] > 180 and v.get("phase", "monophase") == phase_type}
+    else:
+        # Pour les voltages standards, filtrage exact
+        onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
+                            if type_onduleur == v["type"] and v["voltage"] == voltage_systeme and v.get("phase", "monophase") == phase_type}
     
     if onduleurs_filtres:
         # Essayer d'abord un seul onduleur du type choisi
@@ -706,8 +741,12 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
             
             # Chercher dans les types compatibles
             for type_compatible in types_compatibles:
-                onduleurs_compatibles = {k: v for k, v in prix_equipements["onduleurs"].items() 
-                                       if type_compatible == v["type"] and v["voltage"] == voltage_systeme and v.get("phase", "monophase") == phase_type}
+                if voltage_systeme == "High Voltage":
+                    onduleurs_compatibles = {k: v for k, v in prix_equipements["onduleurs"].items() 
+                                           if type_compatible == v["type"] and v["voltage"] > 180 and v.get("phase", "monophase") == phase_type}
+                else:
+                    onduleurs_compatibles = {k: v for k, v in prix_equipements["onduleurs"].items() 
+                                           if type_compatible == v["type"] and v["voltage"] == voltage_systeme and v.get("phase", "monophase") == phase_type}
                 
                 for nom, specs in sorted(onduleurs_compatibles.items(), key=lambda x: x[1]["puissance"]):
                     if specs["puissance"] >= dimensionnement["puissance_onduleur"]:
@@ -737,7 +776,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     regulateur_select = None
     if type_onduleur != "Hybride" and puissance_panneau_select and batterie_select:
         puissance_panneaux_totale = nb_panneaux * prix_equipements["panneaux"][puissance_panneau_select]["puissance"]
-        amperage_requis = (puissance_panneaux_totale / voltage_systeme) * 1.25
+        amperage_requis = (puissance_panneaux_totale / voltage_systeme_numeric) * 1.25
         
         regulateurs_filtres = {k: v for k, v in prix_equipements["regulateurs"].items() 
                               if v["type"] == type_regulateur}
@@ -1409,9 +1448,9 @@ with tab1:
         # Voltage du système
         voltage = st.selectbox(
             "⚡ Voltage du système",
-            [12, 24, 48],
+            [12, 24, 48, "High Voltage"],
             index=2,
-            help="24V recommandé pour usage domestique"
+            help="48V recommandé pour usage domestique, High Voltage pour installations industrielles (>180V)"
         )
         
         # Niveau d'autonomie (pourcentage de besoins couverts)
@@ -1580,14 +1619,16 @@ with tab1:
             
             with col2:
                 # Batteries avec indicateurs de performance
-                capacite_kwh = (dim['capacite_batterie'] * voltage) / 1000.0
+                # Convertir voltage en valeur numérique pour les calculs
+                voltage_numeric = 400 if voltage == "High Voltage" else int(voltage)
+                capacite_kwh = (dim['capacite_batterie'] * voltage_numeric) / 1000.0
                 autonomie_jours = capacite_kwh / st.session_state.consommation
                 
                 st.markdown(f"""
                 <div style="background: linear-gradient(135deg, #2196F3, #1976D2); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center;">
                     <h3 style="margin: 0; font-size: 18px;">🔋 Batteries</h3>
                     <h2 style="margin: 5px 0; font-size: 24px;">{dim['capacite_batterie']:.0f} Ah</h2>
-                    <p style="margin: 0; font-size: 14px; opacity: 0.9;">({capacite_kwh:.1f} kWh à {voltage}V)</p>
+                    <p style="margin: 0; font-size: 14px; opacity: 0.9;">({capacite_kwh:.1f} kWh à {voltage if voltage != "High Voltage" else "High Voltage"}{"V" if voltage != "High Voltage" else ""})</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
@@ -1628,14 +1669,20 @@ with tab1:
                     # Gérer le nouveau format avec couplage
                     if isinstance(onduleur_data, tuple):
                         onduleur_nom, nb_onduleurs = onduleur_data
-                        if nb_onduleurs > 1:
-                            st.success(f"✅ **{nb_onduleurs} x {onduleur_nom}** (couplage)")
-                            st.caption(f"🔗 Puissance totale: {nb_onduleurs * prix_equipements['onduleurs'][onduleur_nom]['puissance']}W")
+                        if onduleur_nom:  # Vérifier que onduleur_nom n'est pas None
+                            if nb_onduleurs > 1:
+                                st.success(f"✅ **{nb_onduleurs} x {onduleur_nom}** (couplage)")
+                                st.caption(f"🔗 Puissance totale: {nb_onduleurs * prix_equipements['onduleurs'][onduleur_nom]['puissance']}W")
+                            else:
+                                st.success(f"✅ **{onduleur_nom}**")
                         else:
-                            st.success(f"✅ **{onduleur_nom}**")
+                            st.warning("⚠️ Aucun onduleur approprié trouvé pour cette configuration")
                     else:
                         # Compatibilité avec l'ancien format
-                        st.success(f"✅ **{onduleur_data}**")
+                        if onduleur_data:  # Vérifier que onduleur_data n'est pas None
+                            st.success(f"✅ **{onduleur_data}**")
+                        else:
+                            st.warning("⚠️ Aucun onduleur approprié trouvé pour cette configuration")
                     
                     # Indicateur de marge de puissance
                     if marge_puissance >= 150:
@@ -2245,7 +2292,9 @@ with tab2:
         with col_info2:
             st.metric("Puissance totale", f"{devis['puissance_totale']:.2f} kWc")
         with col_info3:
-            st.metric("Type système", f"{st.session_state.choix['voltage']}V {st.session_state.choix['type_batterie']}")
+            voltage_display = st.session_state.choix['voltage']
+            voltage_text = voltage_display if voltage_display == "High Voltage" else f"{voltage_display}V"
+            st.metric("Type système", f"{voltage_text} {st.session_state.choix['type_batterie']}")
         with col_info4:
             surface_m2_resume = devis['puissance_totale'] * SURFACE_PAR_KWC_M2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT/100.0)
             st.metric("Surface panneaux approx.", f"{surface_m2_resume:.1f} m²")
@@ -2462,7 +2511,7 @@ Couverte estimée        : {(st.session_state.production_solaire_kwh_j if 'produ
 Puissance installée     : {devis['puissance_totale']:.2f} kWc
 Surface panneaux approx. : {devis['puissance_totale'] * SURFACE_PAR_KWC_M2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT/100.0):.1f} m²
 Type de batterie        : {st.session_state.choix['type_batterie']}
-Voltage système         : {st.session_state.choix['voltage']}V
+Voltage système         : {st.session_state.choix['voltage'] if st.session_state.choix['voltage'] == "High Voltage" else f"{st.session_state.choix['voltage']}V"}
 Type onduleur           : {st.session_state.choix['type_onduleur']}
 
 📦 DÉTAILS DES ÉQUIPEMENTS
@@ -2551,7 +2600,8 @@ Pour plus d'informations : energiesolairesenegal.com
             resume_table.cell(3, 0).text = 'Type de batterie'
             resume_table.cell(3, 1).text = st.session_state.choix['type_batterie']
             resume_table.cell(4, 0).text = 'Voltage système'
-            resume_table.cell(4, 1).text = f"{st.session_state.choix['voltage']}V"
+            voltage_display = st.session_state.choix['voltage']
+            resume_table.cell(4, 1).text = voltage_display if voltage_display == "High Voltage" else f"{voltage_display}V"
             resume_table.cell(5, 0).text = 'Type onduleur'
             resume_table.cell(5, 1).text = st.session_state.choix['type_onduleur']
             
@@ -2687,7 +2737,9 @@ Pour plus d'informations : energiesolairesenegal.com
             row += 1
             ws[f'A{row}'] = f"Type de batterie: {st.session_state.choix['type_batterie']}"
             row += 1
-            ws[f'A{row}'] = f"Voltage système: {st.session_state.choix['voltage']}V"
+            voltage_display = st.session_state.choix['voltage']
+            voltage_text = voltage_display if voltage_display == "High Voltage" else f"{voltage_display}V"
+            ws[f'A{row}'] = f"Voltage système: {voltage_text}"
             row += 1
             ws[f'A{row}'] = f"Type onduleur: {st.session_state.choix['type_onduleur']}"
             row += 2
@@ -2919,7 +2971,7 @@ L'utilisateur a dimensionné une installation avec:
 - Puissance panneaux: {dim['puissance_panneaux']:.0f} Wc
 - Capacité batteries: {dim['capacite_batterie']:.0f} Ah ({choix['type_batterie']})
 - Puissance onduleur: {dim['puissance_onduleur']:.0f} W ({choix['type_onduleur']})
-- Voltage système: {choix['voltage']}V
+- Voltage système: {choix['voltage'] if choix['voltage'] == "High Voltage" else f"{choix['voltage']}V"}
 - Climat: Sénégal (chaleur, humidité, 5h ensoleillement moyen)
 """
         
@@ -3490,7 +3542,11 @@ if is_user_authenticated() and is_admin_user():
                                 with col1:
                                     new_capacite = st.number_input("Capacité (Ah)", min_value=0, step=10, value=article_details.get('capacite', 0))
                                     new_voltage = st.number_input("Voltage (V)", min_value=0, step=12, value=article_details.get('voltage', 12))
-                                    new_type = st.selectbox("Type", ["Plomb", "AGM", "GEL", "Lithium"], index=["Plomb", "AGM", "GEL", "Lithium"].index(article_details.get('type', 'Plomb')))
+                                    battery_types = ["Plomb", "AGM", "GEL", "Lithium", "Lithium HV"]
+                                    current_type = article_details.get('type', 'Plomb')
+                                    type_index = battery_types.index(current_type) if current_type in battery_types else 0
+                                    new_type = st.selectbox("Type", battery_types, index=type_index, 
+                                                          help="Choisissez 'Lithium' pour voltage standard (12V-24V) ou 'Lithium HV' pour haute tension (48V+)")
                                 with col2:
                                     new_cycles = st.number_input("Cycles", min_value=0, step=100, value=article_details.get('cycles', 0))
                                     new_decharge = st.number_input("Décharge max (%)", min_value=0, max_value=100, step=5, value=article_details.get('decharge_max', 50))
@@ -3638,7 +3694,8 @@ if is_user_authenticated() and is_admin_user():
                 elif selected_category == "batteries":
                     new_capacite = st.number_input("Capacité (Ah)", min_value=0, step=10)
                     new_voltage = st.number_input("Voltage (V)", min_value=0, step=12)
-                    new_type = st.selectbox("Type", ["Plomb", "AGM", "GEL", "Lithium"]) 
+                    new_type = st.selectbox("Type", ["Plomb", "AGM", "GEL", "Lithium", "Lithium HV"], 
+                                          help="Choisissez 'Lithium' pour voltage standard (12V-24V) ou 'Lithium HV' pour haute tension (48V+)") 
                     new_cycles = st.number_input("Cycles", min_value=0, step=100)
                     new_decharge = st.number_input("Décharge max (%)", min_value=0, max_value=100, step=5)
                     new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
@@ -4317,7 +4374,11 @@ if is_user_authenticated() and is_admin_user():
                             st.write(f"Puissance: {dim.get('puissance_totale_kwc', 'N/A')} kWc")
                             st.write(f"Prix estimé: {dim.get('prix_total_fcfa', 'N/A'):,} FCFA" if dim.get('prix_total_fcfa') else "Prix: N/A")
                             st.write(f"Batterie: {dim.get('type_batterie', 'N/A')}")
-                            st.write(f"Voltage: {dim.get('voltage_systeme', 'N/A')}V")
+                            voltage_display = dim.get('voltage_systeme', 'N/A')
+                            if voltage_display == "High Voltage":
+                                st.write(f"Voltage: {voltage_display}")
+                            else:
+                                st.write(f"Voltage: {voltage_display}V")
                         
                         # Commentaires
                         if request.get('commentaires'):
