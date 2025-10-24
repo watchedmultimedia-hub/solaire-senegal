@@ -19,14 +19,47 @@ from firebase_config import (
     initialize_accessories_rate_in_firebase, get_change_history
 )
 
+# Fonction pour synchroniser les données locales vers Firebase
+def sync_local_to_firebase():
+    """Synchronise les données locales PRIX_EQUIPEMENTS vers Firebase"""
+    try:
+        from firebase_config import save_equipment_prices
+        success = save_equipment_prices(PRIX_EQUIPEMENTS)
+        if success:
+            st.success("✅ Données locales synchronisées vers Firebase avec succès!")
+            # Vider le cache pour forcer le rechargement
+            get_current_prices.clear()
+            return True
+        else:
+            st.error("❌ Erreur lors de la synchronisation vers Firebase")
+            return False
+    except Exception as e:
+        st.error(f"❌ Erreur de synchronisation: {e}")
+        return False
+
 # Fonction pour obtenir les prix actuels (Firebase uniquement)
 @st.cache_data(ttl=3600)  # Cache pendant 1 heure
 def get_current_prices():
     """Obtient les prix actuels depuis Firebase, avec fallback vers PRIX_EQUIPEMENTS"""
     firebase_prices = get_equipment_prices()
     if firebase_prices:
+        # Vérifier si Firebase contient des onduleurs hybrides
+        if "onduleurs" in firebase_prices:
+            has_hybrid = any(specs.get("type") == "Hybride" for specs in firebase_prices["onduleurs"].values())
+            if not has_hybrid:
+                st.warning("⚠️ Aucun onduleur hybride trouvé dans Firebase. Synchronisation en cours...")
+                if sync_local_to_firebase():
+                    # Recharger les données après synchronisation
+                    firebase_prices = get_equipment_prices()
         return firebase_prices
     else:
+        # Firebase vide, synchroniser les données locales
+        st.warning("⚠️ Firebase vide. Synchronisation des données locales en cours...")
+        if sync_local_to_firebase():
+            # Recharger les données après synchronisation
+            firebase_prices = get_equipment_prices()
+            if firebase_prices:
+                return firebase_prices
         # Utilise les prix par défaut si Firebase n'a pas de données
         return PRIX_EQUIPEMENTS
 
@@ -73,6 +106,7 @@ PRIX_EQUIPEMENTS = {
         "375W Monocristallin": {"prix": 49174, "puissance": 375, "type": "Monocristallin"},
         "450W Monocristallin": {"prix": 56199, "puissance": 450, "type": "Monocristallin"},
         "550W Monocristallin": {"prix": 65233, "puissance": 550, "type": "Monocristallin"},
+        "700W Monocristallin": {"prix": 78000, "puissance": 700, "type": "Monocristallin"},
     },
     "batteries": {
         # Batteries Plomb-Acide (traditionnelles) — prix promo alignés
@@ -92,33 +126,47 @@ PRIX_EQUIPEMENTS = {
         "GEL 200Ah 12V": {"prix": 210759, "capacite": 200, "voltage": 12, "type": "GEL", "cycles": 1200, "decharge_max": 80},
         "GEL 250Ah 12V": {"prix": 450000, "capacite": 250, "voltage": 12, "type": "GEL", "cycles": 1200, "decharge_max": 80},
         
-        # Batteries Lithium LiFePO4 — prix promo alignés
+        # Batteries Lithium LiFePO4 Normales (12V-24V) — prix promo alignés
         "Lithium 100Ah 12V": {"prix": 450000, "capacite": 100, "voltage": 12, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
         "Lithium 150Ah 12V": {"prix": 650000, "capacite": 150, "voltage": 12, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
         "Lithium 200Ah 12V": {"prix": 850000, "capacite": 200, "voltage": 12, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
-        "Lithium 150Ah 48V": {"prix": 1345883, "capacite": 150, "voltage": 48, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
-        "Lithium 200Ah 48V": {"prix": 1103959, "capacite": 200, "voltage": 48, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
+        "Lithium 100Ah 24V": {"prix": 750000, "capacite": 100, "voltage": 24, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
+        "Lithium 150Ah 24V": {"prix": 950000, "capacite": 150, "voltage": 24, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
+        
+        # Batteries Lithium Haute Tension (48V et plus) — prix promo alignés
+        "Lithium HV 100Ah 48V": {"prix": 950000, "capacite": 100, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95},
+        "Lithium HV 150Ah 48V": {"prix": 1345883, "capacite": 150, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95},
+        "Lithium HV 200Ah 48V": {"prix": 1103959, "capacite": 200, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95},
+        "Lithium HV 250Ah 48V": {"prix": 1650000, "capacite": 250, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95},
+        "Lithium HV 300Ah 48V": {"prix": 1950000, "capacite": 300, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95},
+        
+        # Batteries Lithium Très Haute Tension (96V et plus) pour installations industrielles
+        "Lithium HV 100Ah 96V": {"prix": 1800000, "capacite": 100, "voltage": 96, "type": "Lithium HV", "cycles": 8000, "decharge_max": 98},
+        "Lithium HV 150Ah 96V": {"prix": 2500000, "capacite": 150, "voltage": 96, "type": "Lithium HV", "cycles": 8000, "decharge_max": 98},
     },
     "onduleurs": {
-        # Onduleurs Standard (Off-Grid)
-        "1000W 12V Pur Sinus": {"prix": 150000, "puissance": 1000, "voltage": 12, "type": "Off-Grid"},
-        "1500W 24V Pur Sinus": {"prix": 240000, "puissance": 1500, "voltage": 24, "type": "Off-Grid"},
-        "2000W 24V Pur Sinus": {"prix": 350000, "puissance": 2000, "voltage": 24, "type": "Off-Grid"},
+        # Onduleurs Standard (Off-Grid) - Monophasés
+        "1000W 12V Pur Sinus": {"prix": 150000, "puissance": 1000, "voltage": 12, "type": "Off-Grid", "phase": "monophase"},
+        "1500W 24V Pur Sinus": {"prix": 240000, "puissance": 1500, "voltage": 24, "type": "Off-Grid", "phase": "monophase"},
+        "2000W 24V Pur Sinus": {"prix": 350000, "puissance": 2000, "voltage": 24, "type": "Off-Grid", "phase": "monophase"},
         
-        # Onduleurs Hybrides (avec MPPT intégré) — prix promo
-        "Hybride 1KVA 12V MPPT": {"prix": 151002, "puissance": 1000, "voltage": 12, "type": "Hybride", "mppt": "30A"},
-        "Hybride 3KVA 24V MPPT": {"prix": 400482, "puissance": 3000, "voltage": 24, "type": "Hybride", "mppt": "60A"},
-        "Hybride 3KVA 48V MPPT": {"prix": 538000, "puissance": 3000, "voltage": 48, "type": "Hybride", "mppt": "80A"},
-        "Hybride 5KVA 48V MPPT": {"prix": 750000, "puissance": 5000, "voltage": 48, "type": "Hybride", "mppt": "100A"},
+        # Onduleurs Hybrides (avec MPPT intégré) - Monophasés — prix promo
+        "Hybride 1KVA 12V MPPT": {"prix": 151002, "puissance": 1000, "voltage": 12, "type": "Hybride", "mppt": "30A", "phase": "monophase"},
+        "Hybride 3KVA 24V MPPT": {"prix": 400482, "puissance": 3000, "voltage": 24, "type": "Hybride", "mppt": "60A", "phase": "monophase"},
+        "Hybride 3KVA 48V MPPT": {"prix": 538000, "puissance": 3000, "voltage": 48, "type": "Hybride", "mppt": "80A", "phase": "monophase"},
+        "Hybride 5KVA 48V MPPT": {"prix": 750000, "puissance": 5000, "voltage": 48, "type": "Hybride", "mppt": "100A", "phase": "monophase"},
+        "Hybride 6KVA 48V MPPT": {"prix": 900000, "puissance": 6000, "voltage": 48, "type": "Hybride", "mppt": "120A", "phase": "monophase"},
         
-        # Onduleurs Online (haute qualité) — prix promo
-        "Online 2KVA": {"prix": 263137, "puissance": 2000, "voltage": 24, "type": "Online"},
-        "Online 3KVA": {"prix": 558049, "puissance": 3000, "voltage": 48, "type": "Online"},
-        "Online 6KVA": {"prix": 1220487, "puissance": 6000, "voltage": 48, "type": "Online"},
-        "Online 10KVA Mono": {"prix": 1750962, "puissance": 10000, "voltage": 48, "type": "Online"},
-        "Online 10KVA 3/3 HF": {"prix": 3157902, "puissance": 10000, "voltage": 48, "type": "Online Tri"},
-        "Online 20KVA 3/3 HF": {"prix": 4565499, "puissance": 20000, "voltage": 48, "type": "Online Tri"},
-        "Online 30KVA 3/3 HF": {"prix": 5974410, "puissance": 30000, "voltage": 48, "type": "Online Tri"},
+        # Onduleurs Online (haute qualité) - Monophasés — prix promo
+        "Online 2KVA": {"prix": 263137, "puissance": 2000, "voltage": 24, "type": "Online", "phase": "monophase"},
+        "Online 3KVA": {"prix": 558049, "puissance": 3000, "voltage": 48, "type": "Online", "phase": "monophase"},
+        "Online 6KVA": {"prix": 1220487, "puissance": 6000, "voltage": 48, "type": "Online", "phase": "monophase"},
+        "Online 10KVA Mono": {"prix": 1750962, "puissance": 10000, "voltage": 48, "type": "Online", "phase": "monophase"},
+        
+        # Onduleurs Online Triphasés (haute qualité) — prix promo
+        "Online 10KVA 3/3 HF": {"prix": 3157902, "puissance": 10000, "voltage": 48, "type": "Online Tri", "phase": "triphase"},
+        "Online 20KVA 3/3 HF": {"prix": 4565499, "puissance": 20000, "voltage": 48, "type": "Online Tri", "phase": "triphase"},
+        "Online 30KVA 3/3 HF": {"prix": 5974410, "puissance": 30000, "voltage": 48, "type": "Online Tri", "phase": "triphase"},
     },
     "regulateurs": {
         # Régulateurs PWM
@@ -160,6 +208,11 @@ INFO_BATTERIES = {
         "avantages": "✓ Durée de vie exceptionnelle (10-12 ans)\n✓ Décharge profonde 90%\n✓ Très léger et compact\n✓ Sans entretien\n✓ Charge ultra-rapide",
         "inconvenients": "✗ Prix élevé (3-4x plus cher)\n✗ Nécessite BMS pour sécurité",
         "usage": "Meilleur investissement long terme, installations modernes"
+    },
+    "Lithium HV": {
+        "avantages": "✓ Durée de vie exceptionnelle (15-20 ans)\n✓ Décharge profonde 95-98%\n✓ Très haute densité énergétique\n✓ BMS avancé intégré\n✓ Charge ultra-rapide\n✓ Idéal pour systèmes 48V+",
+        "inconvenients": "✗ Prix très élevé (5-6x plus cher)\n✗ Nécessite onduleurs compatibles HV\n✗ Installation par professionnel requis",
+        "usage": "Installations industrielles, systèmes haute puissance, autonomie maximale"
     }
 }
 
@@ -535,7 +588,7 @@ def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltag
 
     # Paramètres selon le type de batterie (priorité aux secrets)
     decharge_max = {}
-    for k, default in [("Plomb", 0.5), ("AGM", 0.7), ("GEL", 0.8), ("Lithium", 0.9)]:
+    for k, default in [("Plomb", 0.5), ("AGM", 0.7), ("GEL", 0.8), ("Lithium", 0.9), ("Lithium HV", 0.95)]:
         try:
             decharge_max[k] = float(st.secrets["formulas"]["decharge_max"][k])
         except Exception:
@@ -543,7 +596,7 @@ def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltag
 
     # Efficacité de cycle batterie (charge/décharge) selon la chimie
     efficacite_batterie_map = {}
-    for k, default in [("Plomb", 0.85), ("AGM", 0.85), ("GEL", 0.85), ("Lithium", 0.93)]:
+    for k, default in [("Plomb", 0.85), ("AGM", 0.85), ("GEL", 0.85), ("Lithium", 0.93), ("Lithium HV", 0.96)]:
         try:
             efficacite_batterie_map[k] = float(st.secrets["formulas"]["battery_efficiency"][k])
         except Exception:
@@ -582,6 +635,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     # Supporte l'absence de type_regulateur (ex: onduleur Hybride)
     type_regulateur = choix_utilisateur.get("type_regulateur", "MPPT")
     voltage_systeme = choix_utilisateur["voltage"]
+    phase_type = choix_utilisateur.get("phase_type", "monophase")
     
     # Sélection panneaux — choisir le module qui minimise le nombre de panneaux
     puissance_panneau_select = None
@@ -628,27 +682,56 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     onduleur_select = None
     nb_onduleurs = 1
     onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
-                        if type_onduleur == v["type"] and v["voltage"] == voltage_systeme}
+                        if type_onduleur == v["type"] and v["voltage"] == voltage_systeme and v.get("phase", "monophase") == phase_type}
     
     if onduleurs_filtres:
-        # Essayer d'abord un seul onduleur
+        # Essayer d'abord un seul onduleur du type choisi
         for nom, specs in sorted(onduleurs_filtres.items(), key=lambda x: x[1]["puissance"]):
             if specs["puissance"] >= dimensionnement["puissance_onduleur"]:
                 onduleur_select = nom
                 break
         
-        # Si aucun onduleur unique ne suffit, essayer le couplage
+        # Si aucun onduleur unique du type choisi ne suffit, chercher dans d'autres types compatibles
         if not onduleur_select:
-            # Prendre l'onduleur le plus puissant disponible
-            onduleur_max = max(onduleurs_filtres.items(), key=lambda x: x[1]["puissance"])
-            nom_max, specs_max = onduleur_max
+            # Définir les types compatibles selon le type choisi
+            types_compatibles = []
+            if type_onduleur == "Hybride":
+                types_compatibles = ["Online", "Online Tri"]  # Hybride peut être remplacé par Online
+            elif type_onduleur == "Off-Grid":
+                types_compatibles = ["Hybride", "Online", "Online Tri"]  # Off-Grid peut être remplacé par tout
+            elif type_onduleur == "Online":
+                types_compatibles = ["Online Tri"]  # Online peut être remplacé par Online Tri
+            elif type_onduleur == "Online Tri":
+                types_compatibles = []  # Online Tri est le plus haut niveau
             
-            # Calculer le nombre d'onduleurs nécessaires
-            nb_onduleurs = int(dimensionnement["puissance_onduleur"] / specs_max["puissance"]) + 1
+            # Chercher dans les types compatibles
+            for type_compatible in types_compatibles:
+                onduleurs_compatibles = {k: v for k, v in prix_equipements["onduleurs"].items() 
+                                       if type_compatible == v["type"] and v["voltage"] == voltage_systeme and v.get("phase", "monophase") == phase_type}
+                
+                for nom, specs in sorted(onduleurs_compatibles.items(), key=lambda x: x[1]["puissance"]):
+                    if specs["puissance"] >= dimensionnement["puissance_onduleur"]:
+                        onduleur_select = nom
+                        break
+                
+                if onduleur_select:
+                    break
+        
+        # Si toujours aucun onduleur unique ne suffit, essayer le couplage avec le type choisi
+        if not onduleur_select:
+            # Prendre l'onduleur le plus puissant disponible du type choisi (avec puissance > 0)
+            onduleurs_valides = {k: v for k, v in onduleurs_filtres.items() if v["puissance"] > 0}
             
-            # Limiter à 4 onduleurs maximum pour des raisons pratiques
-            if nb_onduleurs <= 4:
-                onduleur_select = nom_max
+            if onduleurs_valides:
+                onduleur_max = max(onduleurs_valides.items(), key=lambda x: x[1]["puissance"])
+                nom_max, specs_max = onduleur_max
+                
+                # Calculer le nombre d'onduleurs nécessaires
+                nb_onduleurs = int(dimensionnement["puissance_onduleur"] / specs_max["puissance"]) + 1
+                
+                # Limiter à 4 onduleurs maximum pour des raisons pratiques
+                if nb_onduleurs <= 4:
+                    onduleur_select = nom_max
     
     # Sélection régulateur (seulement si onduleur pas hybride)
     regulateur_select = None
@@ -1278,9 +1361,9 @@ with tab1:
         # Type de batterie
         type_batterie = st.selectbox(
             "🔋 Type de batterie",
-            ["Plomb", "AGM", "GEL", "Lithium"],
+            ["Plomb", "AGM", "GEL", "Lithium", "Lithium HV"],
             index=3,
-            help="AGM recommandé pour le climat sénégalais"
+            help="AGM recommandé pour le climat sénégalais, Lithium HV pour installations haute puissance"
         )
         
         # Affichage des caractéristiques de la batterie choisie
@@ -1298,6 +1381,13 @@ with tab1:
             help="Hybride = avec régulateur MPPT intégré"
         )
         
+        # Choix monophasé/triphasé
+        phase_type = st.selectbox(
+            "🔌 Type de phase",
+            ["monophase", "triphase"],
+            index=0,
+            help="Monophasé pour usage domestique, Triphasé pour usage industriel"
+        )
         
         # Type de régulateur (si nécessaire)
         type_regulateur = "MPPT"
@@ -1410,7 +1500,8 @@ with tab1:
                     "type_batterie": type_batterie,
                     "type_onduleur": type_onduleur,
                     "type_regulateur": type_regulateur,
-                    "voltage": voltage
+                    "voltage": voltage,
+                    "phase_type": phase_type
                 }
                 
                 # Sélection des équipements
@@ -1505,7 +1596,9 @@ with tab1:
                     
                     # Indicateur de qualité de la batterie
                     type_batterie = st.session_state.choix['type_batterie']
-                    if type_batterie == "Lithium":
+                    if type_batterie == "Lithium HV":
+                        st.caption("🔥 Lithium HV - Durée de vie 15-20 ans, haute performance")
+                    elif type_batterie == "Lithium":
                         st.caption("🚀 Lithium - Durée de vie 10-12 ans")
                     elif type_batterie == "GEL":
                         st.caption("⭐ GEL - Durée de vie 5-7 ans")
@@ -1549,14 +1642,17 @@ with tab1:
                     else:
                         st.caption("🔴 Marge de puissance juste")
                     
-                    # Type d'onduleur
+                    # Type d'onduleur et phase
                     type_onduleur = st.session_state.choix['type_onduleur']
+                    phase_type = st.session_state.choix.get('phase_type', 'monophase')
+                    phase_display = "Monophasé" if phase_type == "monophase" else "Triphasé"
+                    
                     if type_onduleur == "Hybride":
-                        st.caption("🔄 Hybride - MPPT intégré")
+                        st.caption(f"🔄 Hybride - MPPT intégré - {phase_display}")
                     elif type_onduleur == "Online":
-                        st.caption("🏆 Online - Qualité premium")
+                        st.caption(f"🏆 Online - Qualité premium - {phase_display}")
                     else:
-                        st.caption("⚡ Off-Grid - Solution basique")
+                        st.caption(f"⚡ Off-Grid - Solution basique - {phase_display}")
                 
             # 📊 Indicateurs de performance du système
             st.markdown("---")
@@ -1895,7 +1991,21 @@ with tab1:
             
             with col_rec1:
                 st.markdown("#### 🔋 Analyse de votre choix de batterie")
-                if type_batterie == "Lithium":
+                if type_batterie == "Lithium HV":
+                    st.markdown("""
+                    <div style="background: #E3F2FD; padding: 15px; border-radius: 10px; border-left: 4px solid #2196F3;">
+                        <h5 style="color: #1565C0; margin: 0 0 10px 0;">🔥 Choix Premium - Haute Performance !</h5>
+                        <ul style="color: #1976D2; margin: 0; padding-left: 20px; font-size: 14px;">
+                            <li><strong>Durée de vie :</strong> 15-20 ans (6x plus que plomb)</li>
+                            <li><strong>Décharge :</strong> 95-98% utilisable</li>
+                            <li><strong>Densité énergétique :</strong> Maximale</li>
+                            <li><strong>BMS avancé :</strong> Protection intelligente</li>
+                            <li><strong>Idéal pour :</strong> Systèmes 48V+ haute puissance</li>
+                            <li><strong>ROI :</strong> Excellent sur très long terme</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
+                elif type_batterie == "Lithium":
                     st.markdown("""
                     <div style="background: #E8F5E8; padding: 15px; border-radius: 10px; border-left: 4px solid #4CAF50;">
                         <h5 style="color: #2E7D32; margin: 0 0 10px 0;">✅ Excellent choix !</h5>
@@ -2825,9 +2935,10 @@ L'utilisateur a dimensionné une installation avec:
         base_voltage = st.session_state.choix['voltage'] if 'choix' in st.session_state else 48
 
         options_spec = [
-            {'nom':'Option Économique','type_batterie':'AGM','type_onduleur':'Off-Grid','type_regulateur':'PWM','voltage':12},
-            {'nom':'Option Équilibrée','type_batterie':'GEL','type_onduleur':'Hybride','type_regulateur':None,'voltage':12},
-            {'nom':'Option Premium','type_batterie':'Lithium','type_onduleur':'Online','type_regulateur':'MPPT','voltage':48},
+            {'nom':'Option Économique','type_batterie':'AGM','type_onduleur':'Off-Grid','type_regulateur':'PWM','voltage':12,'phase_type':'monophase'},
+            {'nom':'Option Équilibrée','type_batterie':'GEL','type_onduleur':'Hybride','type_regulateur':None,'voltage':12,'phase_type':'monophase'},
+            {'nom':'Option Premium','type_batterie':'Lithium','type_onduleur':'Online','type_regulateur':'MPPT','voltage':48,'phase_type':'monophase'},
+            {'nom':'Option Ultra Premium','type_batterie':'Lithium HV','type_onduleur':'Hybride','type_regulateur':None,'voltage':48,'phase_type':'monophase'},
         ]
 
         for opt in options_spec:
@@ -2843,7 +2954,8 @@ L'utilisateur a dimensionné une installation avec:
             choix_opt = {
                 'type_batterie': opt['type_batterie'],
                 'type_onduleur': opt['type_onduleur'],
-                'voltage': opt.get('voltage', base_voltage)
+                'voltage': opt.get('voltage', base_voltage),
+                'phase_type': opt.get('phase_type', 'monophase')
             }
             if opt['type_onduleur'] != 'Hybride':
                 choix_opt['type_regulateur'] = opt['type_regulateur']
@@ -3290,7 +3402,7 @@ if is_user_authenticated() and is_admin_user():
         with admin_tab1:
             st.subheader("💰 Gestion des Prix des Équipements")
             
-            # Bouton pour vider le cache des données et recharger les prix
+            # Boutons de gestion
             col_refresh, col_info = st.columns([1, 3])
             with col_refresh:
                 if st.button("🔄 Recharger les prix (vider le cache)"):
@@ -3298,7 +3410,7 @@ if is_user_authenticated() and is_admin_user():
                     st.success("Cache vidé. Les prix seront rechargés.")
                     st.rerun()
             with col_info:
-                st.caption("Utilisez ce bouton si le chargement des prix semble lent ou s'il affiche des valeurs obsolètes.")
+                st.caption("Rechargez le cache pour recharger les prix depuis Firebase.")
             
             # Charger les prix actuels depuis Firebase (sans fusion avec les valeurs par défaut)
             current_prices = get_current_prices()
@@ -3326,8 +3438,8 @@ if is_user_authenticated() and is_admin_user():
                         else:
                             st.error("❌ Erreur lors du vidage des prix")
             
-            # Interface de modification des prix
-            st.markdown("### 🔧 Modifier les prix")
+            # Interface de modification des articles
+            st.markdown("### 🔧 Modifier les articles existants")
             
             # Sélection de catégorie (liste fixe et filtrée)
             categories = ["panneaux", "batteries", "onduleurs", "regulateurs"]
@@ -3341,40 +3453,132 @@ if is_user_authenticated() and is_admin_user():
                 if not isinstance(equipements, dict):
                     equipements = {}
                 
-                # Créer un formulaire pour modifier les prix
-                with st.form(f"form_{selected_category}"):
-                    modified_prices = {}
+                if equipements:
+                    # Sélection de l'article à modifier
+                    article_names = list(equipements.keys())
+                    selected_article = st.selectbox("Choisir un article à modifier", article_names)
                     
-                    for nom_equipement, details in equipements.items():
-                        col1, col2 = st.columns([2, 1])
-                        with col1:
-                            st.write(f"**{nom_equipement}**")
-                        with col2:
-                            # Utiliser le prix actuel (Firebase ou défaut)
-                            current_price = current_prices.get(selected_category, {}).get(nom_equipement, {}).get('prix', details['prix'])
-                            new_price = st.number_input(
-                                f"Prix (FCFA)",
-                                min_value=0,
-                                value=int(current_price),
-                                step=1000,
-                                key=f"price_{selected_category}_{nom_equipement}"
-                            )
-                            modified_prices[nom_equipement] = {**details, 'prix': new_price}
-                    
-                    if st.form_submit_button("💾 Sauvegarder les prix"):
-                        # Mettre à jour les prix dans la structure complète
-                        updated_prices = current_prices.copy()
-                        updated_prices[selected_category] = modified_prices
+                    if selected_article:
+                        st.markdown(f"**Modification de : {selected_article}**")
+                        article_details = equipements[selected_article]
                         
-                        # Sauvegarder dans Firebase
-                        if save_equipment_prices(updated_prices):
-                            st.success(f"✅ Prix de la catégorie '{selected_category}' sauvegardés avec succès!")
-                            # Vider le cache spécifique des prix
-                            clear_prices_cache()
-                            st.cache_data.clear()
-                            st.rerun()
-                        else:
-                            st.error("❌ Erreur lors de la sauvegarde")
+                        # Formulaire de modification selon la catégorie
+                        with st.form(f"modify_{selected_category}_{selected_article}"):
+                            modified_item = {}
+                            
+                            if selected_category == "panneaux":
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    new_puissance = st.number_input("Puissance (W)", min_value=0, step=10, value=article_details.get('puissance', 0))
+                                    new_type = st.selectbox("Type", ["Monocristallin", "Polycristallin"], index=0 if article_details.get('type') == "Monocristallin" else 1)
+                                with col2:
+                                    new_voltage = st.number_input("Voltage (V)", min_value=0, step=12, value=article_details.get('voltage', 12))
+                                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000, value=article_details.get('prix', 0))
+                                
+                                modified_item = {
+                                    "puissance": int(new_puissance),
+                                    "voltage": int(new_voltage),
+                                    "type": new_type,
+                                    "prix": int(new_price)
+                                }
+                                
+                            elif selected_category == "batteries":
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    new_capacite = st.number_input("Capacité (Ah)", min_value=0, step=10, value=article_details.get('capacite', 0))
+                                    new_voltage = st.number_input("Voltage (V)", min_value=0, step=12, value=article_details.get('voltage', 12))
+                                    new_type = st.selectbox("Type", ["Plomb", "AGM", "GEL", "Lithium"], index=["Plomb", "AGM", "GEL", "Lithium"].index(article_details.get('type', 'Plomb')))
+                                with col2:
+                                    new_cycles = st.number_input("Cycles", min_value=0, step=100, value=article_details.get('cycles', 0))
+                                    new_decharge = st.number_input("Décharge max (%)", min_value=0, max_value=100, step=5, value=article_details.get('decharge_max', 50))
+                                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000, value=article_details.get('prix', 0))
+                                
+                                modified_item = {
+                                    "capacite": int(new_capacite),
+                                    "voltage": int(new_voltage),
+                                    "type": new_type,
+                                    "cycles": int(new_cycles),
+                                    "decharge_max": int(new_decharge),
+                                    "prix": int(new_price)
+                                }
+                                
+                            elif selected_category == "onduleurs":
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    new_puissance = st.number_input("Puissance (W)", min_value=0, step=100, value=article_details.get('puissance', 0))
+                                    new_voltage = st.number_input("Voltage (V)", min_value=0, step=12, value=article_details.get('voltage', 12))
+                                    new_type = st.selectbox("Type", ["Off-Grid", "Hybride", "Online", "Online Tri"], index=["Off-Grid", "Hybride", "Online", "Online Tri"].index(article_details.get('type', 'Off-Grid')))
+                                with col2:
+                                    new_phase = st.selectbox("Phase", ["monophase", "triphase"], index=0 if article_details.get('phase', 'monophase') == 'monophase' else 1, help="Monophasé pour usage domestique, Triphasé pour usage industriel")
+                                    new_mppt = st.text_input("MPPT (optionnel)", value=article_details.get('mppt', ''))
+                                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000, value=article_details.get('prix', 0))
+                                
+                                modified_item = {
+                                    "puissance": int(new_puissance),
+                                    "voltage": int(new_voltage),
+                                    "type": new_type,
+                                    "phase": new_phase,
+                                    "mppt": new_mppt,
+                                    "prix": int(new_price)
+                                }
+                                
+                            elif selected_category == "regulateurs":
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    new_amperage = st.number_input("Ampérage (A)", min_value=0, step=5, value=article_details.get('amperage', 0))
+                                    new_type = st.selectbox("Type", ["PWM", "MPPT"], index=0 if article_details.get('type') == "PWM" else 1)
+                                with col2:
+                                    new_voltage_max = st.number_input("Voltage max (V)", min_value=0, step=12, value=article_details.get('voltage_max', 12))
+                                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000, value=article_details.get('prix', 0))
+                                
+                                modified_item = {
+                                    "amperage": int(new_amperage),
+                                    "type": new_type,
+                                    "voltage_max": int(new_voltage_max),
+                                    "prix": int(new_price)
+                                }
+                            
+                            col_save, col_delete = st.columns(2)
+                            with col_save:
+                                save_button = st.form_submit_button("💾 Sauvegarder", type="primary")
+                            with col_delete:
+                                delete_button = st.form_submit_button("🗑️ Supprimer", type="secondary")
+                            
+                            if save_button:
+                                # Validation spécifique pour les onduleurs
+                                if selected_category == "onduleurs" and modified_item.get("puissance", 0) <= 0:
+                                    st.warning("⚠️ La puissance de l'onduleur doit être supérieure à 0")
+                                else:
+                                    # Mettre à jour l'article dans la structure complète
+                                    updated_prices = current_prices.copy()
+                                    updated_prices[selected_category][selected_article] = modified_item
+                                    
+                                    # Sauvegarder dans Firebase
+                                    if save_equipment_prices(updated_prices):
+                                        st.success(f"✅ Article '{selected_article}' modifié avec succès!")
+                                        # Vider le cache spécifique des prix
+                                        clear_prices_cache()
+                                        st.cache_data.clear()
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Erreur lors de la sauvegarde")
+                            
+                            if delete_button:
+                                # Supprimer l'article de la structure complète
+                                updated_prices = current_prices.copy()
+                                del updated_prices[selected_category][selected_article]
+                                
+                                # Sauvegarder dans Firebase
+                                if save_equipment_prices(updated_prices):
+                                    st.success(f"✅ Article '{selected_article}' supprimé avec succès!")
+                                    # Vider le cache spécifique des prix
+                                    clear_prices_cache()
+                                    st.cache_data.clear()
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Erreur lors de la suppression")
+                else:
+                    st.info("Aucun article trouvé dans cette catégorie.")
                 
                 # Section séparée pour la suppression d'équipements
                 st.markdown("---")
@@ -3447,12 +3651,14 @@ if is_user_authenticated() and is_admin_user():
                     new_puissance = st.number_input("Puissance (W)", min_value=0, step=100)
                     new_voltage = st.number_input("Voltage (V)", min_value=0, step=12)
                     new_type = st.selectbox("Type", ["Off-Grid", "Hybride", "Online", "Online Tri"]) 
+                    new_phase = st.selectbox("Phase", ["monophase", "triphase"], help="Monophasé pour usage domestique, Triphasé pour usage industriel")
                     new_mppt = st.text_input("MPPT (optionnel)")
                     new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
                     new_item = {
                         "puissance": int(new_puissance),
                         "voltage": int(new_voltage),
                         "type": new_type,
+                        "phase": new_phase,
                         "mppt": new_mppt,
                         "prix": int(new_price)
                     }
@@ -3475,6 +3681,8 @@ if is_user_authenticated() and is_admin_user():
                 if add_submit:
                     if not new_name or len(new_name.strip()) < 2:
                         st.warning("⚠️ Veuillez renseigner un nom d'article valide")
+                    elif selected_category == "onduleurs" and new_item.get("puissance", 0) <= 0:
+                        st.warning("⚠️ La puissance de l'onduleur doit être supérieure à 0")
                     else:
                         updated_prices = current_prices.copy()
                         if selected_category not in updated_prices:
