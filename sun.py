@@ -134,15 +134,15 @@ PRIX_EQUIPEMENTS = {
         "Lithium 150Ah 24V": {"prix": 950000, "capacite": 150, "voltage": 24, "type": "Lithium", "cycles": 3000, "decharge_max": 90},
         
         # Batteries Lithium Haute Tension (48V et plus) — prix promo alignés
-        "Lithium HV 100Ah 48V": {"prix": 950000, "capacite": 100, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95},
-        "Lithium HV 150Ah 48V": {"prix": 1345883, "capacite": 150, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95},
-        "Lithium HV 200Ah 48V": {"prix": 1103959, "capacite": 200, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95},
-        "Lithium HV 250Ah 48V": {"prix": 1650000, "capacite": 250, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95},
-        "Lithium HV 300Ah 48V": {"prix": 1950000, "capacite": 300, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95},
+        "Lithium HV 4.8kWh 48V": {"prix": 950000, "capacite": 100, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95, "kwh": 4.8},
+        "Lithium HV 7.2kWh 48V": {"prix": 1345883, "capacite": 150, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95, "kwh": 7.2},
+        "Lithium HV 9.6kWh 48V": {"prix": 1103959, "capacite": 200, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95, "kwh": 9.6},
+        "Lithium HV 12kWh 48V": {"prix": 1650000, "capacite": 250, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95, "kwh": 12.0},
+        "Lithium HV 14.4kWh 48V": {"prix": 1950000, "capacite": 300, "voltage": 48, "type": "Lithium HV", "cycles": 6000, "decharge_max": 95, "kwh": 14.4},
         
         # Batteries Lithium Très Haute Tension (96V et plus) pour installations industrielles
-        "Lithium HV 100Ah 96V": {"prix": 1800000, "capacite": 100, "voltage": 96, "type": "Lithium HV", "cycles": 8000, "decharge_max": 98},
-        "Lithium HV 150Ah 96V": {"prix": 2500000, "capacite": 150, "voltage": 96, "type": "Lithium HV", "cycles": 8000, "decharge_max": 98},
+        "Lithium HV 9.6kWh 96V": {"prix": 1800000, "capacite": 100, "voltage": 96, "type": "Lithium HV", "cycles": 8000, "decharge_max": 98, "kwh": 9.6},
+        "Lithium HV 14.4kWh 96V": {"prix": 2500000, "capacite": 150, "voltage": 96, "type": "Lithium HV", "cycles": 8000, "decharge_max": 98, "kwh": 14.4},
     },
     "onduleurs": {
         # Onduleurs Standard (Off-Grid) - Monophasés
@@ -686,24 +686,44 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
         # Pour High Voltage, prendre les batteries Lithium HV avec voltage > 48V
         batteries_filtrees = {k: v for k, v in prix_equipements["batteries"].items() 
                              if v["type"] == "Lithium HV" and v["voltage"] > 48}
+        
+        # Pour les batteries HV, utiliser les kWh pour la comparaison
+        if batteries_filtrees:
+            # Convertir la capacité requise en kWh pour les batteries HV
+            # voltage_systeme_numeric est défini plus haut dans la fonction
+            capacite_requise_kwh = (dimensionnement["capacite_batterie"] * voltage_systeme_numeric) / 1000.0
+            
+            for nom, specs in sorted(batteries_filtrees.items(), key=lambda x: x[1].get("kwh", 0)):
+                if specs.get("kwh", 0) >= capacite_requise_kwh:
+                    batterie_select = nom
+                    nb_batteries = 1
+                    break
+            
+            # Si aucune batterie assez grande, prendre plusieurs petites
+            if not batterie_select:
+                nom_batterie = max(batteries_filtrees.keys(), key=lambda x: batteries_filtrees[x].get("kwh", 0))
+                specs = batteries_filtrees[nom_batterie]
+                kwh_unitaire = specs.get("kwh", 1)
+                nb_batteries = int(capacite_requise_kwh / kwh_unitaire) + 1
+                batterie_select = nom_batterie
     else:
-        # Pour les voltages standards, filtrage exact
+        # Pour les voltages standards, filtrage exact avec logique Ah
         batteries_filtrees = {k: v for k, v in prix_equipements["batteries"].items() 
                              if v["type"] == type_batterie and v["voltage"] == voltage_systeme}
-    
-    if batteries_filtrees:
-        for nom, specs in sorted(batteries_filtrees.items(), key=lambda x: x[1]["capacite"]):
-            if specs["capacite"] >= dimensionnement["capacite_batterie"]:
-                batterie_select = nom
-                nb_batteries = 1
-                break
         
-        # Si aucune batterie assez grande, prendre plusieurs petites
-        if not batterie_select:
-            nom_batterie = max(batteries_filtrees.keys(), key=lambda x: batteries_filtrees[x]["capacite"])
-            specs = batteries_filtrees[nom_batterie]
-            nb_batteries = int(dimensionnement["capacite_batterie"] / specs["capacite"]) + 1
-            batterie_select = nom_batterie
+        if batteries_filtrees:
+            for nom, specs in sorted(batteries_filtrees.items(), key=lambda x: x[1]["capacite"]):
+                if specs["capacite"] >= dimensionnement["capacite_batterie"]:
+                    batterie_select = nom
+                    nb_batteries = 1
+                    break
+            
+            # Si aucune batterie assez grande, prendre plusieurs petites
+            if not batterie_select:
+                nom_batterie = max(batteries_filtrees.keys(), key=lambda x: batteries_filtrees[x]["capacite"])
+                specs = batteries_filtrees[nom_batterie]
+                nb_batteries = int(dimensionnement["capacite_batterie"] / specs["capacite"]) + 1
+                batterie_select = nom_batterie
     
     # Sélection onduleur selon le type choisi avec couplage si nécessaire
     onduleur_select = None
@@ -1151,7 +1171,7 @@ with st.sidebar:
 
 # Onglets principaux avec admin si connecté
 if is_user_authenticated() and is_admin_user():
-    tab1, tab2, tab3, tab_contact, tab_admin = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Pape - Conseiller solaire", "📞 Contact", "⚙️ Admin"])
+    tab1, tab2, tab3, tab_contact, tab_admin = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire", "📞 Contact", "⚙️ Admin"])
 else:
     tab1, tab2, tab3, tab_contact = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller Technique", "📞 Contact"])
 
@@ -1624,13 +1644,25 @@ with tab1:
                 capacite_kwh = (dim['capacite_batterie'] * voltage_numeric) / 1000.0
                 autonomie_jours = capacite_kwh / st.session_state.consommation
                 
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #2196F3, #1976D2); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center;">
-                    <h3 style="margin: 0; font-size: 18px;">🔋 Batteries</h3>
-                    <h2 style="margin: 5px 0; font-size: 24px;">{dim['capacite_batterie']:.0f} Ah</h2>
-                    <p style="margin: 0; font-size: 14px; opacity: 0.9;">({capacite_kwh:.1f} kWh à {voltage if voltage != "High Voltage" else "High Voltage"}{"V" if voltage != "High Voltage" else ""})</p>
-                </div>
-                """, unsafe_allow_html=True)
+                # Affichage adapté selon le type de batterie
+                if voltage == "High Voltage":
+                    # Pour les batteries HV, afficher en kWh en priorité
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(135deg, #2196F3, #1976D2); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center;">
+                        <h3 style="margin: 0; font-size: 18px;">🔋 Batteries HV</h3>
+                        <h2 style="margin: 5px 0; font-size: 24px;">{capacite_kwh:.1f} kWh</h2>
+                        <p style="margin: 0; font-size: 14px; opacity: 0.9;">(≈{dim['capacite_batterie']:.0f} Ah équivalent à High Voltage)</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    # Pour les batteries standards, afficher en Ah en priorité
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(135deg, #2196F3, #1976D2); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center;">
+                        <h3 style="margin: 0; font-size: 18px;">🔋 Batteries</h3>
+                        <h2 style="margin: 5px 0; font-size: 24px;">{dim['capacite_batterie']:.0f} Ah</h2>
+                        <p style="margin: 0; font-size: 14px; opacity: 0.9;">({capacite_kwh:.1f} kWh à {voltage}V)</p>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
                 batterie_nom, nb = equip["batterie"]
                 if batterie_nom:
@@ -2930,7 +2962,7 @@ Pour plus d'informations : energiesolairesenegal.com
     """)
         
 with tab3:
-    st.header("☀️ Pape - Conseiller solaire")
+    st.header("☀️ Conseiller solaire")
     
     api_ready = ('DEEPSEEK_API_KEY' in st.secrets) and bool(st.secrets.get('DEEPSEEK_API_KEY', ''))
     if not api_ready:
@@ -2969,7 +3001,7 @@ L'utilisateur a dimensionné une installation avec:
 - Couverture souhaitée: {(st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)}% ({(st.session_state.consommation_couverte if 'consommation_couverte' in st.session_state else st.session_state.consommation):.1f} kWh/j)
 - Couverture estimée: {auto_reelle_ctx:.0f}% ({prod_kwh_j_ctx:.1f} kWh/j)
 - Puissance panneaux: {dim['puissance_panneaux']:.0f} Wc
-- Capacité batteries: {dim['capacite_batterie']:.0f} Ah ({choix['type_batterie']})
+- Capacité batteries: {f"{(dim['capacite_batterie'] * (400 if choix['voltage'] == 'High Voltage' else choix['voltage'])) / 1000:.1f} kWh" if choix['voltage'] == "High Voltage" else f"{dim['capacite_batterie']:.0f} Ah"} ({choix['type_batterie']})
 - Puissance onduleur: {dim['puissance_onduleur']:.0f} W ({choix['type_onduleur']})
 - Voltage système: {choix['voltage'] if choix['voltage'] == "High Voltage" else f"{choix['voltage']}V"}
 - Climat: Sénégal (chaleur, humidité, 5h ensoleillement moyen)
@@ -3540,13 +3572,38 @@ if is_user_authenticated() and is_admin_user():
                             elif selected_category == "batteries":
                                 col1, col2 = st.columns(2)
                                 with col1:
-                                    new_capacite = st.number_input("Capacité (Ah)", min_value=0, step=10, value=article_details.get('capacite', 0))
                                     new_voltage = st.number_input("Voltage (V)", min_value=0, step=12, value=article_details.get('voltage', 12))
                                     battery_types = ["Plomb", "AGM", "GEL", "Lithium", "Lithium HV"]
                                     current_type = article_details.get('type', 'Plomb')
                                     type_index = battery_types.index(current_type) if current_type in battery_types else 0
                                     new_type = st.selectbox("Type", battery_types, index=type_index, 
-                                                          help="Choisissez 'Lithium' pour voltage standard (12V-24V) ou 'Lithium HV' pour haute tension (48V+)")
+                                                          help="Choisissez 'Lithium' pour voltage standard (12V-24V) ou 'Lithium HV' pour haute tension (48V+)",
+                                                          key="battery_type_modify")
+                                    
+                                    # Champs de capacité conditionnels selon le type de batterie
+                                    new_capacite = 0
+                                    new_kwh = None
+                                    
+                                    # Utilisation d'un container pour forcer le rafraîchissement
+                                    capacity_container = st.container()
+                                    
+                                    with capacity_container:
+                                        if new_type == "Lithium HV":
+                                            current_kwh = article_details.get('kwh', 0.0)
+                                            new_kwh = st.number_input("Capacité (kWh)", min_value=0.0, step=0.1, value=current_kwh,
+                                                                    help="Pour les batteries haute tension, spécifiez la capacité en kWh",
+                                                                    key=f"battery_kwh_modify_{new_type}")
+                                            st.info("💡 Les batteries Lithium HV sont spécifiées en kWh plutôt qu'en Ah")
+                                            # Calcul automatique des Ah équivalents pour la compatibilité
+                                            if new_kwh > 0 and new_voltage > 0:
+                                                new_capacite = int((new_kwh * 1000) / new_voltage)
+                                                st.caption(f"Équivalent: ~{new_capacite} Ah à {new_voltage}V")
+                                            else:
+                                                new_capacite = article_details.get('capacite', 0)
+                                        else:
+                                            new_capacite = st.number_input("Capacité (Ah)", min_value=0, step=10, value=article_details.get('capacite', 0),
+                                                                         key=f"battery_ah_modify_{new_type}")
+                                
                                 with col2:
                                     new_cycles = st.number_input("Cycles", min_value=0, step=100, value=article_details.get('cycles', 0))
                                     new_decharge = st.number_input("Décharge max (%)", min_value=0, max_value=100, step=5, value=article_details.get('decharge_max', 50))
@@ -3560,6 +3617,10 @@ if is_user_authenticated() and is_admin_user():
                                     "decharge_max": int(new_decharge),
                                     "prix": int(new_price)
                                 }
+                                
+                                # Ajouter le champ kWh si c'est une batterie Lithium HV
+                                if new_type == "Lithium HV" and new_kwh is not None:
+                                    modified_item["kwh"] = float(new_kwh)
                                 
                             elif selected_category == "onduleurs":
                                 col1, col2 = st.columns(2)
@@ -3692,13 +3753,36 @@ if is_user_authenticated() and is_admin_user():
                         "prix": int(new_price)
                     }
                 elif selected_category == "batteries":
-                    new_capacite = st.number_input("Capacité (Ah)", min_value=0, step=10)
                     new_voltage = st.number_input("Voltage (V)", min_value=0, step=12)
                     new_type = st.selectbox("Type", ["Plomb", "AGM", "GEL", "Lithium", "Lithium HV"], 
-                                          help="Choisissez 'Lithium' pour voltage standard (12V-24V) ou 'Lithium HV' pour haute tension (48V+)") 
+                                          help="Choisissez 'Lithium' pour voltage standard (12V-24V) ou 'Lithium HV' pour haute tension (48V+)",
+                                          key="battery_type_add") 
+                    
+                    # Champs de capacité conditionnels selon le type de batterie
+                    new_capacite = 0
+                    new_kwh = None
+                    
+                    # Utilisation d'un container pour forcer le rafraîchissement
+                    capacity_container = st.container()
+                    
+                    with capacity_container:
+                        if new_type == "Lithium HV":
+                            new_kwh = st.number_input("Capacité (kWh)", min_value=0.0, step=0.1, 
+                                                    help="Pour les batteries haute tension, spécifiez la capacité en kWh",
+                                                    key=f"battery_kwh_add_{new_type}")
+                            st.info("💡 Les batteries Lithium HV sont spécifiées en kWh plutôt qu'en Ah")
+                            # Calcul automatique des Ah équivalents pour la compatibilité
+                            if new_kwh > 0 and new_voltage > 0:
+                                new_capacite = int((new_kwh * 1000) / new_voltage)
+                                st.caption(f"Équivalent: ~{new_capacite} Ah à {new_voltage}V")
+                        else:
+                            new_capacite = st.number_input("Capacité (Ah)", min_value=0, step=10,
+                                                         key=f"battery_ah_add_{new_type}")
+                    
                     new_cycles = st.number_input("Cycles", min_value=0, step=100)
                     new_decharge = st.number_input("Décharge max (%)", min_value=0, max_value=100, step=5)
                     new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
+                    
                     new_item = {
                         "capacite": int(new_capacite),
                         "voltage": int(new_voltage),
@@ -3707,6 +3791,10 @@ if is_user_authenticated() and is_admin_user():
                         "decharge_max": int(new_decharge),
                         "prix": int(new_price)
                     }
+                    
+                    # Ajouter le champ kWh si c'est une batterie Lithium HV
+                    if new_type == "Lithium HV" and new_kwh is not None:
+                        new_item["kwh"] = float(new_kwh)
                 elif selected_category == "onduleurs":
                     new_puissance = st.number_input("Puissance (W)", min_value=0, step=100)
                     new_voltage = st.number_input("Voltage (V)", min_value=0, step=12)
