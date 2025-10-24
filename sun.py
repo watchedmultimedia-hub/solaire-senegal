@@ -314,7 +314,7 @@ def appeler_assistant_ia(question, contexte=""):
             "Content-Type": "application/json"
         }
         
-        prompt = f"""Tu es un expert en énergie solaire au Sénégal. Tu connais bien le climat local (chaleur, humidité) et les meilleures pratiques d'installation.
+        prompt = f"""Tu es Pape, un expert en énergie solaire d'Energie Solaire Sénégal. Tu connais bien le climat local (chaleur, humidité) et les meilleures pratiques d'installation.
 Contexte: {contexte}
 Question: {question}
 Réponds de manière claire et pratique en français, avec des conseils adaptés au Sénégal."""
@@ -322,7 +322,7 @@ Réponds de manière claire et pratique en français, avec des conseils adaptés
         data = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25, +221 78 177 39 26, +221 77 250 47 90)."},
+                {"role": "system", "content": "Tu es Pape, un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25, +221 78 177 39 26, +221 77 250 47 90)."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7
@@ -359,7 +359,7 @@ def appeler_assistant_ia_stream(question, contexte="", max_tokens=None, limite_c
         }
         consigne_concise = ("Réponds de façon concise en 5–7 phrases max, "
                              "avec des points clés si utile, sans longs détails.") if concis else ""
-        prompt = f"""Tu es un expert en énergie solaire au Sénégal. Tu connais bien le climat local (chaleur, humidité) et les meilleures pratiques d'installation.
+        prompt = f"""Tu es Pape, un expert en énergie solaire d'Energie Solaire Sénégal. Tu connais bien le climat local (chaleur, humidité) et les meilleures pratiques d'installation.
 
 IMPORTANT: Tu représentes et recommandes Energie Solaire Sénégal, notre partenaire officiel pour tous les équipements et installations solaires au Sénégal.
 
@@ -380,7 +380,7 @@ Réponds de manière claire et pratique en français, avec des conseils adaptés
         data = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25, +221 78 177 39 26, +221 77 250 47 90)."},
+                {"role": "system", "content": "Tu es Pape, un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25, +221 78 177 39 26, +221 77 250 47 90)."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7,
@@ -475,6 +475,43 @@ def obtenir_prix_depuis_site(nom_item: str):
     except Exception:
         return None, url_prod
 
+@st.cache_data(ttl=86400)
+def get_pvgis_monthly_psh(lat, lon, optimalangles=True, angle=None, aspect=None, raddatabase="PVGIS-SARAH3"):
+    """Récupère les PSH (E_d kWh/kWp/jour) mensuelles via PVGIS PVcalc.
+    Retourne un dict: {"psh_by_month": {1: val, ..., 12: val}, "meta": {...}}
+    """
+    try:
+        params = {
+            "lat": float(lat),
+            "lon": float(lon),
+            "peakpower": 1,
+            "loss": 14,
+            "outputformat": "json",
+            "raddatabase": raddatabase,
+            "pvtechchoice": "crystSi"
+        }
+        if optimalangles:
+            params["optimalangles"] = 1
+        else:
+            params["optimalangles"] = 0
+            if angle is not None:
+                params["angle"] = float(angle)
+            if aspect is not None:
+                params["aspect"] = float(aspect)
+        resp = requests.get("https://re.jrc.ec.europa.eu/api/PVcalc", params=params, timeout=30)
+        data = resp.json()
+        monthly = data.get("outputs", {}).get("monthly", [])
+        psh_by_month = {int(m.get("month")): float(m.get("E_d")) for m in monthly if m.get("E_d") is not None}
+        meta = {
+            "angle": data.get("inputs", {}).get("angle"),
+            "aspect": data.get("inputs", {}).get("aspect"),
+            "raddatabase": data.get("inputs", {}).get("raddatabase"),
+            "location": data.get("inputs", {}).get("location")
+        }
+        return {"psh_by_month": psh_by_month, "meta": meta}
+    except Exception as e:
+        return {"psh_by_month": {}, "meta": {"error": str(e)}}
+
 # Fonction de dimensionnement améliorée
 def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltage=12, type_batterie="AGM", part_nuit=0.5):
     # Coefficients issus des secrets (avec valeurs par défaut en repli)
@@ -486,6 +523,13 @@ def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltag
         solar_hours = float(st.secrets["formulas"]["solar_hours"])
     except Exception:
         solar_hours = 5.0
+    # Override des heures solaires si PVGIS a été utilisé
+    try:
+        override_sh = float(st.session_state.get("solar_hours_override", 0) or 0)
+        if override_sh > 0:
+            solar_hours = override_sh
+    except Exception:
+        pass
     try:
         inverter_peak_fraction = float(st.secrets["formulas"]["inverter_peak_fraction"])
     except Exception:
@@ -499,6 +543,14 @@ def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltag
         except Exception:
             decharge_max[k] = default
 
+    # Efficacité de cycle batterie (charge/décharge) selon la chimie
+    efficacite_batterie_map = {}
+    for k, default in [("Plomb", 0.85), ("AGM", 0.85), ("GEL", 0.85), ("Lithium", 0.93)]:
+        try:
+            efficacite_batterie_map[k] = float(st.secrets["formulas"]["battery_efficiency"][k])
+        except Exception:
+            efficacite_batterie_map[k] = default
+
     # Calcul de la puissance panneau nécessaire
     # Sortie en Watts-crête (Wc)
     puissance_panneaux = ((consommation_journaliere * panel_loss_factor) / max(solar_hours, 0.1)) * 1000
@@ -506,8 +558,9 @@ def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltag
     # Hypothèse réaliste: charge le jour, décharge la nuit
     # On dimensionne la batterie sur la fraction nocturne de la consommation
     profondeur_decharge = decharge_max.get(type_batterie, 0.7)
+    efficacite_batterie = efficacite_batterie_map.get(type_batterie, 0.85 if type_batterie in ("Plomb", "AGM", "GEL") else 0.93)
     consommation_nocturne = consommation_journaliere * max(0.1, min(part_nuit, 1.0))
-    capacite_batterie = (consommation_nocturne * autonomie_jours * 1000) / (voltage * max(profondeur_decharge, 0.01))
+    capacite_batterie = (consommation_nocturne * autonomie_jours * 1000) / (voltage * max(profondeur_decharge, 0.01) * max(efficacite_batterie, 0.01))
 
     # Puissance onduleur (fraction de la conso journalière)
     puissance_onduleur = consommation_journaliere * inverter_peak_fraction * 1000  # en W
@@ -517,7 +570,8 @@ def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltag
         "capacite_batterie": capacite_batterie,
         "puissance_onduleur": puissance_onduleur,
         "type_batterie": type_batterie,
-        "profondeur_decharge": profondeur_decharge * 100
+        "profondeur_decharge": profondeur_decharge * 100,
+        "efficacite_cycle": efficacite_batterie * 100
     }
 
 # Fonction pour sélectionner les équipements
@@ -837,14 +891,14 @@ with st.sidebar:
             st.image("logo-solaire.svg", width=350)
     except:
         st.markdown("### ☀️ Energie Solaire Sénégal")
-    st.markdown("### ☀️ Conseiller solaire (chat rapide)")
+    st.markdown("### ☀️ Pape - Conseiller solaire (chat rapide)")
     
     # Callback: déclenché à l'appui sur Entrée
     def _trigger_sidebar_chat():
         st.session_state.sidebar_chat_go = True
     
     q_sidebar = st.text_input(
-        "Votre question au conseiller",
+        "Votre question à Pape",
         placeholder="Ex: Décrivez vos appareils ou votre besoin",
         key="sidebar_chat_q",
         on_change=_trigger_sidebar_chat
@@ -872,10 +926,10 @@ with st.sidebar:
                 autonomie_voulue_ctx = choix.get('autonomie_h', None)
                 pack_info = f"{choix.get('type_batterie','?')} / {choix.get('type_onduleur','?')} / {('MPPT' if choix.get('type_regulateur')=='MPPT' else 'PWM' if choix.get('type_regulateur')=='PWM' else 'auto')} @ {choix.get('voltage', 12)}V"
                 contexte_sb = f"Conso quotidienne: {conso_totale_ctx} kWh/j ; Couverture cible: {conso_couverte_ctx or 'N/A'} kWh/j ; Prod estimée: {round(prod_kwh_j_ctx,2)} kWh/j ; Autonomie cible: {autonomie_voulue_ctx or 'N/A'} h ; Pack choisi: {pack_info}"
-            with st.spinner("🤔 Le conseiller répond en streaming (réponse courte)..."):
+            with st.spinner("🤔 Pape répond en streaming (réponse courte)..."):
                 st.write_stream(appeler_assistant_ia_stream(q_sidebar, contexte_sb, concis=True, max_tokens=220, limite_caracteres=700))
             st.session_state.sidebar_chat_go = False
-            st.caption("Réponse abrégée. Pour plus de détails, utilisez l’onglet Conseiller solaire.")
+            st.caption("Réponse abrégée de Pape. Pour plus de détails, utilisez l'onglet Conseiller solaire.")
         else:
             st.session_state.sidebar_chat_go = False
             st.warning("⚠️ Veuillez entrer une question (minimum 6 caractères)")
@@ -945,9 +999,9 @@ with st.sidebar:
 
 # Onglets principaux avec admin si connecté
 if is_user_authenticated() and is_admin_user():
-    tab1, tab2, tab3, tab_contact, tab_admin = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire", "📞 Contact", "⚙️ Admin"])
+    tab1, tab2, tab3, tab_contact, tab_admin = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Pape - Conseiller solaire", "📞 Contact", "⚙️ Admin"])
 else:
-    tab1, tab2, tab3, tab_contact = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire", "📞 Contact"])
+    tab1, tab2, tab3, tab_contact = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Pape - Conseiller solaire", "📞 Contact"])
 
 with tab1:
     st.header("Calculez vos besoins en énergie solaire")
@@ -1054,7 +1108,7 @@ with tab1:
                             st.success(f"Ajouté: {appareil_nom} • {quant} × {puissance_w}W • {heures} h/j")
                 
                     # Ajouter via Conseiller solaire (sans expander)
-                    show_ai = st.checkbox("Ajouter via Conseiller solaire (mots-clés simples)", value=False, key="ai_show_checkbox")
+                    show_ai = st.checkbox("Ajouter via Pape (mots-clés simples)", value=False, key="ai_show_checkbox")
                     if show_ai:
                         phrase = st.text_input("Décrivez vos appareils (ex: 2 tv, 1 frigo, routeur wifi)", key="ai_phrase_input")
                         if st.button("Proposer et ajouter", key="ai_proposer_btn"):
@@ -1236,13 +1290,50 @@ with tab1:
         
         # Niveau d'autonomie (pourcentage de besoins couverts)
         autonomie_pct = st.slider(
-            "🔄 Niveau d’autonomie (%)",
-            min_value=0,
-            max_value=100,
-            value=100,
-            step=5,
-            help="Objectif de couverture souhaitée par le solaire (cible)"
-        )
+        "🔄 Niveau d’autonomie (%)",
+        min_value=0,
+        max_value=100,
+        value=100,
+        step=5,
+        help="Objectif de couverture souhaitée par le solaire (cible)"
+    )
+
+    # Localisation et PSH PVGIS
+    with st.expander("📍 Localisation et PSH PVGIS", expanded=False):
+        villes = {
+            "Dakar": (14.6937, -17.4441),
+            "Thiès": (14.7900, -16.9240),
+            "Saint-Louis": (16.0170, -16.4890),
+            "Ziguinchor": (12.5560, -16.2720),
+            "Tambacounda": (13.7700, -13.6670),
+            "Kaolack": (14.1470, -16.0740),
+            "Kolda": (12.8850, -14.9550),
+            "Louga": (15.6180, -16.2240),
+            "Matam": (15.6600, -13.3430),
+            "Sédhiou": (12.7100, -15.5540),
+            "Kaffrine": (14.1050, -15.5480),
+            "Kédougou": (12.5540, -12.1740),
+            "Autre (coordonnées)": None
+        }
+        ville = st.selectbox("Ville", list(villes.keys()), index=list(villes.keys()).index("Dakar"), key="pvgis_city")
+        if ville == "Autre (coordonnées)":
+            lat = st.number_input("Latitude", -90.0, 90.0, value=st.session_state.get("location_lat", 14.6937), step=0.001, key="location_lat")
+            lon = st.number_input("Longitude", -180.0, 180.0, value=st.session_state.get("location_lon", -17.4441), step=0.001, key="location_lon")
+        else:
+            lat, lon = villes[ville]
+            st.session_state["location_lat"] = lat
+            st.session_state["location_lon"] = lon
+            st.caption(f"Coordonnées: lat {lat:.4f}, lon {lon:.4f}")
+        use_optimal = st.checkbox("Utiliser l’angle optimal PVGIS", value=True, key="pvgis_optimal")
+        if use_optimal:
+            st.caption("Optimalangles activé (inclinaison/azimut calculés par PVGIS)")
+        else:
+            angle = st.slider("Inclinaison (°)", 0, 60, value=20, key="pvgis_angle")
+            aspect = st.slider("Azimut (°)", -90, 90, value=0, help="0=Sud, -90=Est, 90=Ouest", key="pvgis_aspect")
+        mode_mois = st.selectbox("Saison / Mois dimensionnant", ["Mois le plus défavorable (PSH min)", "Choisir un mois"], index=0, key="pvgis_month_mode")
+        if mode_mois == "Choisir un mois":
+            mois_label = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+            mois = st.selectbox("Mois", mois_label, index=11, key="pvgis_selected_month")
     
     # Bouton de calcul
     st.markdown("---")
@@ -1255,6 +1346,30 @@ with tab1:
             with st.spinner("⚙️ Calcul en cours..."):
                 # Calcul du dimensionnement avec niveau d’autonomie appliqué
                 consommation_couverte = consommation_finale * autonomie_pct / 100.0
+
+                # PVGIS: récupérer PSH mensuelles et choisir la saison
+                lat = st.session_state.get("location_lat", 14.6937)
+                lon = st.session_state.get("location_lon", -17.4441)
+                optimal = st.session_state.get("pvgis_optimal", True)
+                angle = st.session_state.get("pvgis_angle", None)
+                aspect = st.session_state.get("pvgis_aspect", None)
+                pvgis = get_pvgis_monthly_psh(lat, lon, optimalangles=optimal, angle=angle, aspect=aspect)
+                monthly_psh = pvgis.get("psh_by_month", {})
+                pvgis_mode = st.session_state.get("pvgis_month_mode", "Mois le plus défavorable (PSH min)")
+                if monthly_psh:
+                    if pvgis_mode.startswith("Choisir"):
+                        mois_label = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+                        selected = st.session_state.get("pvgis_selected_month", "Décembre")
+                        mois_num = mois_label.index(selected) + 1 if selected in mois_label else 12
+                        solar_hours_use = monthly_psh.get(mois_num, min(monthly_psh.values()))
+                    else:
+                        solar_hours_use = min(monthly_psh.values())
+                    st.session_state["solar_hours_override"] = float(solar_hours_use)
+                    st.session_state["pvgis_monthly_psh"] = monthly_psh
+                    st.session_state["pvgis_meta"] = pvgis.get("meta", {})
+                else:
+                    st.session_state["solar_hours_override"] = None
+
                 dim = calculer_dimensionnement(consommation_couverte, voltage=voltage, type_batterie=type_batterie)
                 
                 # Choix utilisateur
@@ -1277,92 +1392,116 @@ with tab1:
                 st.session_state.choix = choix_utilisateur
                 
                 st.success("✅ Dimensionnement effectué avec succès !")
-                
-                # Affichage des résultats
-                st.markdown("---")
-                st.markdown("## 📊 Résultats du Dimensionnement")
-                
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric(
-                        "🌞 Panneaux Solaires",
-                        f"{dim['puissance_panneaux']:.0f} Wc",
-                        help="Puissance crête totale nécessaire"
-                    )
-                    panneau_nom, nb = equip["panneau"]
-                    if panneau_nom:
-                        st.info(f"**{nb} x {panneau_nom}**")
-                        surface_dim_m2 = (dim['puissance_panneaux'] / 1000.0) * SURFACE_PAR_KWC_M2
-                        surface_dim_m2 = surface_dim_m2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT / 100.0)
-                        st.caption(f"Surface panneaux approx.: ~{surface_dim_m2:.1f} m²")
-                
-                with col2:
-                    st.metric(
-                        "🔋 Batteries",
-                        f"{dim['capacite_batterie']:.0f} Ah",
-                        help=f"Capacité à {voltage}V avec décharge max {dim['profondeur_decharge']:.0f}%"
-                    )
-                    batterie_nom, nb = equip["batterie"]
-                    if batterie_nom:
-                        st.info(f"**{nb} x {batterie_nom}**")
-                
-                with col3:
-                    st.metric(
-                        "⚡ Onduleur",
-                        f"{dim['puissance_onduleur']:.0f} W",
-                        help="Puissance de l'onduleur"
-                    )
-                    if equip["onduleur"]:
-                        st.info(f"**{equip['onduleur']}**")
-                
-                                # 📅 Simulateur de production mensuelle (Sénégal)
-                kWc = dim['puissance_panneaux'] / 1000.0
-                heures_par_jour = {
-                    'Jan': 6.2, 'Fév': 6.5, 'Mar': 6.7, 'Avr': 6.6, 'Mai': 6.5, 'Juin': 6.0,
-                    'Juil': 5.5, 'Août': 5.4, 'Sep': 5.8, 'Oct': 6.0, 'Nov': 6.2, 'Déc': 6.1
-                }
-                jours_mois = {'Jan':31,'Fév':28,'Mar':31,'Avr':30,'Mai':31,'Juin':30,'Juil':31,'Août':31,'Sep':30,'Oct':31,'Nov':30,'Déc':31}
-                PR = 0.80
 
-                data = []
-                for m in heures_par_jour:
-                    prod = kWc * heures_par_jour[m] * PR * jours_mois[m]
-                    data.append({'Mois': m, 'Production (kWh)': round(prod, 2)})
 
-                df_prod = pd.DataFrame(data)
+                
+            # Affichage des résultats
+            st.markdown("---")
+            st.markdown("## 📊 Résultats du Dimensionnement")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(
+                    "🌞 Panneaux Solaires",
+                    f"{dim['puissance_panneaux']:.0f} Wc",
+                    help="Puissance crête totale nécessaire"
+                )
+                panneau_nom, nb = equip["panneau"]
+                if panneau_nom:
+                    st.info(f"**{nb} x {panneau_nom}**")
+                    surface_dim_m2 = (dim['puissance_panneaux'] / 1000.0) * SURFACE_PAR_KWC_M2
+                    surface_dim_m2 = surface_dim_m2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT / 100.0)
+                    st.caption(f"Surface panneaux approx.: ~{surface_dim_m2:.1f} m²")
+            
+            with col2:
+                st.metric(
+                    "🔋 Batteries",
+                    f"{dim['capacite_batterie']:.0f} Ah",
+                    help=f"Capacité à {voltage}V avec décharge max {dim['profondeur_decharge']:.0f}%"
+                )
+                batterie_nom, nb = equip["batterie"]
+                if batterie_nom:
+                    st.info(f"**{nb} x {batterie_nom}**")
+            
+            with col3:
+                st.metric(
+                    "⚡ Onduleur",
+                    f"{dim['puissance_onduleur']:.0f} W",
+                    help="Puissance de l'onduleur"
+                )
+                if equip["onduleur"]:
+                    st.info(f"**{equip['onduleur']}**")
+                
+            # 📅 Simulateur de production mensuelle (Sénégal)
+            kWc = dim['puissance_panneaux'] / 1000.0
+            heures_par_jour = {
+                'Jan': 6.2, 'Fév': 6.5, 'Mar': 6.7, 'Avr': 6.6, 'Mai': 6.5, 'Juin': 6.0,
+                'Juil': 5.5, 'Août': 5.4, 'Sep': 5.8, 'Oct': 6.0, 'Nov': 6.2, 'Déc': 6.1
+            }
+            jours_mois = {'Jan':31,'Fév':28,'Mar':31,'Avr':30,'Mai':31,'Juin':30,'Juil':31,'Août':31,'Sep':30,'Oct':31,'Nov':30,'Déc':31}
+            PR = 0.80
 
-                st.subheader("📅 Simulateur de production mensuelle")
-                st.bar_chart(df_prod.set_index('Mois'))
+            data = []
+            for m in heures_par_jour:
+                prod = kWc * heures_par_jour[m] * PR * jours_mois[m]
+                data.append({'Mois': m, 'Production (kWh)': round(prod, 2)})
 
-                st.caption("Estimation basée sur l'ensoleillement moyen au Sénégal; impact saison des pluies intégré.")
+            df_prod = pd.DataFrame(data)
 
-                # Régulateur si nécessaire
-                if equip["regulateur"]:
-                    st.markdown("### 🎛️ Régulateur de charge")
-                    st.info(f"**{equip['regulateur']}**")
-                
-                # Avertissements et recommandations
-                st.markdown("---")
-                st.markdown("### 💡 Recommandations")
-                
-                col_rec1, col_rec2 = st.columns(2)
-                
-                with col_rec1:
-                    if type_batterie == "Lithium":
-                        st.success("✅ Excellent choix ! Les batteries Lithium durent 3x plus longtemps")
-                    elif type_batterie == "GEL":
-                        st.success("✅ Très bon choix pour le climat sénégalais")
-                    elif type_batterie == "AGM":
-                        st.info("👍 Bon compromis qualité/prix pour le Sénégal")
-                    else:
-                        st.warning("⚠️ Batteries plomb nécessitent un entretien régulier (eau distillée)")
-                
-                with col_rec2:
-                    if type_regulateur == "MPPT" or type_onduleur == "Hybride":
-                        st.success("✅ MPPT recommandé : +30% de rendement")
-                    else:
-                        st.info("💡 Conseil : MPPT serait 30% plus efficace")
+            st.subheader("📅 Simulateur de production mensuelle")
+            st.bar_chart(df_prod.set_index('Mois'))
+
+            st.caption("Estimation basée sur l'ensoleillement moyen au Sénégal; impact saison des pluies intégré.")
+
+            # Régulateur si nécessaire
+            if equip["regulateur"]:
+                st.markdown("### 🎛️ Régulateur de charge")
+                st.info(f"**{equip['regulateur']}**")
+            
+            # Avertissements et recommandations
+            st.markdown("---")
+            st.markdown("### 💡 Recommandations")
+            
+            col_rec1, col_rec2 = st.columns(2)
+            
+            with col_rec1:
+                if type_batterie == "Lithium":
+                    st.success("✅ Excellent choix ! Les batteries Lithium durent 3x plus longtemps")
+                elif type_batterie == "GEL":
+                    st.success("✅ Très bon choix pour le climat sénégalais")
+                elif type_batterie == "AGM":
+                    st.info("👍 Bon compromis qualité/prix pour le Sénégal")
+                else:
+                    st.warning("⚠️ Batteries plomb nécessitent un entretien régulier (eau distillée)")
+            
+            with col_rec2:
+                if type_regulateur == "MPPT" or type_onduleur == "Hybride":
+                    st.success("✅ MPPT recommandé : +30% de rendement")
+                else:
+                    st.info("💡 Conseil : MPPT serait 30% plus efficace")
+            
+            # Section PSH PVGIS séparée
+            if st.session_state.get("pvgis_monthly_psh"):
+                with st.expander("🌍 Données PVGIS utilisées", expanded=False):
+                    psh_used = st.session_state.get("solar_hours_override")
+                    pvgis_mode = st.session_state.get("pvgis_month_mode")
+                    label_mode = "mois choisi" if (pvgis_mode or "").startswith("Choisir") else "PSH minimale (saison creuse)"
+                    
+                    col_psh1, col_psh2 = st.columns(2)
+                    with col_psh1:
+                        st.metric("PSH utilisé pour le calcul", f"{psh_used:.2f} h/jour", help="Heures de soleil équivalent utilisées dans le dimensionnement")
+                        st.info(f"**Mode sélectionné :** {label_mode}")
+                    
+                    with col_psh2:
+                        st.subheader("📊 PSH mensuel PVGIS")
+                        df_psh = pd.DataFrame({
+                            "Mois": ["Jan","Fév","Mar","Avr","Mai","Jun","Juil","Aoû","Sep","Oct","Nov","Déc"],
+                            "PSH (h)": [st.session_state["pvgis_monthly_psh"].get(i+1, None) for i in range(12)]
+                        })
+                        st.bar_chart(df_psh.set_index("Mois"))
+                    
+                    st.caption("📡 Source: PVGIS (Photovoltaic Geographical Information System) - Commission Européenne")
         else:
             st.error("❌ Veuillez entrer une consommation supérieure à 0")
 
@@ -2043,7 +2182,7 @@ Pour plus d'informations : energiesolairesenegal.com
     """)
         
 with tab3:
-    st.header("☀️ Conseiller solaire")
+    st.header("☀️ Pape - Conseiller solaire")
     
     api_ready = ('DEEPSEEK_API_KEY' in st.secrets) and bool(st.secrets.get('DEEPSEEK_API_KEY', ''))
     if not api_ready:
@@ -2175,7 +2314,7 @@ L'utilisateur a dimensionné une installation avec:
         with col_q1:
             if st.button("🔧 Entretien des panneaux", use_container_width=True):
                 question = "Comment entretenir mes panneaux solaires au Sénégal avec la poussière et le sable ?"
-                with st.spinner("🤔 L'expert répond en streaming..."):
+                with st.spinner("🤔 Pape répond en streaming..."):
                     st.markdown("**Question:**")
                     st.info(question)
                     st.markdown("**Réponse de l'expert (streaming):**")
@@ -2184,19 +2323,19 @@ L'utilisateur a dimensionné une installation avec:
         with col_q2:
             if st.button("⚡ Durée de vie", use_container_width=True):
                 question = "Quelle est la durée de vie de mon installation et quand faut-il remplacer les équipements ?"
-                with st.spinner("🤔 L'expert répond en streaming..."):
+                with st.spinner("🤔 Pape répond en streaming..."):
                     st.markdown("**Question:**")
                     st.info(question)
-                    st.markdown("**Réponse de l'expert (streaming):**")
+                    st.markdown("**Réponse de Pape (streaming):**")
                     st.write_stream(appeler_assistant_ia_stream(question, contexte))
         
         with col_q3:
             if st.button("🌧️ Saison des pluies", use_container_width=True):
                 question = "Comment optimiser ma production pendant la saison des pluies au Sénégal ?"
-                with st.spinner("🤔 L'expert répond en streaming..."):
+                with st.spinner("🤔 Pape répond en streaming..."):
                     st.markdown("**Question:**")
                     st.info(question)
-                    st.markdown("**Réponse de l'expert (streaming):**")
+                    st.markdown("**Réponse de Pape (streaming):**")
                     st.write_stream(appeler_assistant_ia_stream(question, contexte))
         
         st.markdown("---")
@@ -2206,28 +2345,28 @@ L'utilisateur a dimensionné une installation avec:
         with col_q4:
             if st.button("🔋 Batterie Lithium vs AGM", use_container_width=True):
                 question = "Pour le climat du Sénégal, quelle est la meilleure batterie : Lithium ou AGM ? Explique les avantages et inconvénients."
-                with st.spinner("🤔 L'expert répond en streaming..."):
+                with st.spinner("🤔 Pape répond en streaming..."):
                     st.markdown("**Question:**")
                     st.info(question)
-                    st.markdown("**Réponse de l'expert (streaming):**")
+                    st.markdown("**Réponse de Pape (streaming):**")
                     st.write_stream(appeler_assistant_ia_stream(question, contexte))
         
         with col_q5:
             if st.button("🔌 Onduleur hybride", use_container_width=True):
                 question = "Pourquoi choisir un onduleur hybride plutôt qu'un onduleur standard ?"
-                with st.spinner("🤔 L'expert répond en streaming..."):
+                with st.spinner("🤔 Pape répond en streaming..."):
                     st.markdown("**Question:**")
                     st.info(question)
-                    st.markdown("**Réponse de l'expert (streaming):**")
+                    st.markdown("**Réponse de Pape (streaming):**")
                     st.write_stream(appeler_assistant_ia_stream(question, contexte))
         
         with col_q6:
             if st.button("💰 Rentabilité", use_container_width=True):
                 question = "Mon installation est-elle rentable ? Comment calculer le retour sur investissement ?"
-                with st.spinner("🤔 L'expert répond en streaming..."):
+                with st.spinner("🤔 Pape répond en streaming..."):
                     st.markdown("**Question:**")
                     st.info(question)
-                    st.markdown("**Réponse de l'expert (streaming):**")
+                    st.markdown("**Réponse de Pape (streaming):**")
                     st.write_stream(appeler_assistant_ia_stream(question, contexte))
         
         st.markdown("---")
@@ -2251,11 +2390,11 @@ L'utilisateur a dimensionné une installation avec:
         
         if envoyer_btn:
             if question_utilisateur and len(question_utilisateur.strip()) > 5:
-                with st.spinner("🤔 Le conseiller solaire répond en streaming..."):
+                with st.spinner("🤔 Pape répond en streaming..."):
                     st.markdown("---")
                     st.markdown("**Votre question:**")
                     st.info(question_utilisateur)
-                    st.markdown("**Réponse détaillée de l'expert (streaming):**")
+                    st.markdown("**Réponse détaillée de Pape (streaming):**")
                     st.write_stream(appeler_assistant_ia_stream(question_utilisateur, contexte))
             else:
                 st.warning("⚠️ Veuillez entrer une question (minimum 5 caractères)")
