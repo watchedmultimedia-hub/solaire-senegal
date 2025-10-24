@@ -22,18 +22,13 @@ from firebase_config import (
 # Fonction pour obtenir les prix actuels (Firebase uniquement)
 @st.cache_data(ttl=3600)  # Cache pendant 1 heure
 def get_current_prices():
-    """Obtient les prix actuels depuis Firebase uniquement"""
+    """Obtient les prix actuels depuis Firebase, avec fallback vers PRIX_EQUIPEMENTS"""
     firebase_prices = get_equipment_prices()
     if firebase_prices:
         return firebase_prices
     else:
-        # Retourne une structure vide si Firebase n'a pas de données
-        return {
-            "panneaux": {},
-            "batteries": {},
-            "onduleurs": {},
-            "regulateurs": {}
-        }
+        # Utilise les prix par défaut si Firebase n'a pas de données
+        return PRIX_EQUIPEMENTS
 
 def clear_prices_cache():
     """Vide le cache des prix pour forcer le rechargement"""
