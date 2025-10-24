@@ -3346,7 +3346,7 @@ if is_user_authenticated() and is_admin_user():
         st.header("⚙️ Panneau d'Administration")
         
         # Sous-onglets admin
-        admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5 = st.tabs(["💰 Gestion des Prix", "🔧 Main d'œuvre", "📋 Devis Clients", "📞 Demandes Clients", "🕘 Historique"])
+        admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5, admin_tab6 = st.tabs(["💰 Gestion des Prix", "🔧 Main d'œuvre", "📋 Devis Clients", "📞 Demandes Clients", "🕘 Historique", "🧮 Calculateur"])
         
         # Historique des modifications
         with admin_tab5:
@@ -4482,6 +4482,375 @@ if is_user_authenticated() and is_admin_user():
                 st.info("📭 Aucune demande client pour le moment")
                 st.markdown("Les demandes apparaîtront ici quand les clients utiliseront le formulaire de contact dans l'onglet Dimensionnement.")
             
+        # Onglet Calculateur
+        with admin_tab6:
+            st.subheader("🧮 Calculateur pour Installateurs Solaires")
+            st.caption("Outils de calcul spécialisés pour les professionnels du solaire")
+            
+            # Sous-onglets pour différents calculateurs
+            calc_tab1, calc_tab2, calc_tab3, calc_tab4 = st.tabs([
+                "⚡ Section Câbles", 
+                "🔌 Disjoncteurs", 
+                "🔋 Autonomie", 
+                "📐 Dimensionnement"
+            ])
+            
+            # Calculateur de section de câbles
+            with calc_tab1:
+                st.markdown("### ⚡ Calculateur de Section de Câbles")
+                st.info("Calculez la section de câble nécessaire en fonction de la puissance, distance et chute de tension admissible.")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Paramètres électriques**")
+                    puissance_cable = st.number_input("Puissance (W)", min_value=1, max_value=50000, value=3000, step=100)
+                    tension_cable = st.selectbox("Tension système (V)", [12, 24, 48, 220, 380], index=2)
+                    type_courant = st.selectbox("Type de courant", ["DC (Continu)", "AC (Alternatif)"], index=0)
+                    
+                with col2:
+                    st.markdown("**Paramètres installation**")
+                    distance_cable = st.number_input("Distance (m)", min_value=0.1, max_value=1000.0, value=10.0, step=0.5)
+                    chute_tension_max = st.slider("Chute de tension max (%)", min_value=1.0, max_value=5.0, value=3.0, step=0.5)
+                    temperature_amb = st.number_input("Température ambiante (°C)", min_value=20, max_value=60, value=30, step=5)
+                
+                if st.button("🔍 Calculer la section", type="primary"):
+                    # Calcul du courant
+                    courant = puissance_cable / tension_cable
+                    
+                    # Calcul de la résistance maximale admissible
+                    chute_tension_v = (chute_tension_max / 100) * tension_cable
+                    resistance_max = chute_tension_v / courant
+                    
+                    # Calcul de la section minimale (résistivité cuivre = 0.017 ohm.mm²/m)
+                    resistivite_cuivre = 0.017
+                    section_min = (resistivite_cuivre * 2 * distance_cable) / resistance_max
+                    
+                    # Facteur de correction température (simplifié)
+                    facteur_temp = 1 + (temperature_amb - 20) * 0.004
+                    section_corrigee = section_min * facteur_temp
+                    
+                    # Sections normalisées disponibles
+                    sections_normalisees = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240, 300]
+                    section_recommandee = next((s for s in sections_normalisees if s >= section_corrigee), 300)
+                    
+                    # Affichage des résultats
+                    st.success("✅ Calcul terminé")
+                    
+                    col_res1, col_res2, col_res3 = st.columns(3)
+                    with col_res1:
+                        st.metric("Courant", f"{courant:.1f} A")
+                        st.metric("Section minimale", f"{section_min:.2f} mm²")
+                    with col_res2:
+                        st.metric("Chute de tension", f"{chute_tension_v:.2f} V")
+                        st.metric("Section corrigée", f"{section_corrigee:.2f} mm²")
+                    with col_res3:
+                        st.metric("**Section recommandée**", f"**{section_recommandee} mm²**")
+                        
+                        # Couleur du câble selon la section
+                        if section_recommandee <= 2.5:
+                            couleur = "🔵 Bleu/Noir"
+                        elif section_recommandee <= 6:
+                            couleur = "🟡 Jaune/Vert"
+                        else:
+                            couleur = "🔴 Rouge/Noir"
+                        st.write(f"Couleur suggérée: {couleur}")
+                    
+                    # Informations complémentaires
+                    st.markdown("---")
+                    st.markdown("**📋 Informations complémentaires:**")
+                    st.write(f"• Résistance linéique: {(resistivite_cuivre / section_recommandee):.4f} Ω/m")
+                    st.write(f"• Chute de tension réelle: {((resistivite_cuivre * 2 * distance_cable * courant) / section_recommandee):.2f} V ({((resistivite_cuivre * 2 * distance_cable * courant) / section_recommandee / tension_cable * 100):.1f}%)")
+                    st.write(f"• Capacité de courant estimée: {section_recommandee * 6:.0f} A (en air libre)")
+            
+            # Calculateur de disjoncteurs
+            with calc_tab2:
+                st.markdown("### 🔌 Dimensionnement des Disjoncteurs")
+                st.info("Calculez le calibre des disjoncteurs et fusibles pour votre installation.")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Équipement à protéger**")
+                    type_protection = st.selectbox("Type d'équipement", [
+                        "Panneau solaire", "Batterie", "Onduleur", "Charge DC", "Charge AC"
+                    ])
+                    puissance_protection = st.number_input("Puissance (W)", min_value=1, max_value=50000, value=1000, step=50)
+                    tension_protection = st.selectbox("Tension (V)", [12, 24, 48, 220, 380], index=1)
+                    
+                with col2:
+                    st.markdown("**Paramètres de protection**")
+                    facteur_securite = st.slider("Facteur de sécurité", min_value=1.1, max_value=2.0, value=1.25, step=0.05)
+                    type_disjoncteur = st.selectbox("Type de protection", ["Disjoncteur DC", "Disjoncteur AC", "Fusible"])
+                    courbe_declenchement = st.selectbox("Courbe de déclenchement", ["B (1-3 In)", "C (5-10 In)", "D (10-20 In)"], index=1)
+                
+                if st.button("🔍 Calculer la protection", type="primary"):
+                    # Calcul du courant nominal
+                    courant_nominal = puissance_protection / tension_protection
+                    
+                    # Application du facteur de sécurité
+                    courant_protection = courant_nominal * facteur_securite
+                    
+                    # Calibres normalisés
+                    calibres_standard = [1, 2, 4, 6, 10, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125, 160, 200, 250]
+                    calibre_recommande = next((c for c in calibres_standard if c >= courant_protection), 250)
+                    
+                    # Recommandations spécifiques par type
+                    if type_protection == "Panneau solaire":
+                        # Pour les panneaux, on utilise souvent 1.56 x Isc
+                        facteur_pv = 1.56
+                        courant_protection_pv = courant_nominal * facteur_pv
+                        calibre_recommande = next((c for c in calibres_standard if c >= courant_protection_pv), 250)
+                        note_specifique = f"Pour panneaux PV: facteur 1.56 x Isc appliqué"
+                    elif type_protection == "Batterie":
+                        note_specifique = "Protection batterie: vérifiez le courant de décharge max"
+                    elif type_protection == "Onduleur":
+                        note_specifique = "Protection onduleur: considérez le courant de démarrage"
+                    else:
+                        note_specifique = "Protection standard appliquée"
+                    
+                    # Affichage des résultats
+                    st.success("✅ Calcul terminé")
+                    
+                    col_res1, col_res2, col_res3 = st.columns(3)
+                    with col_res1:
+                        st.metric("Courant nominal", f"{courant_nominal:.1f} A")
+                        st.metric("Courant de protection", f"{courant_protection:.1f} A")
+                    with col_res2:
+                        st.metric("**Calibre recommandé**", f"**{calibre_recommande} A**")
+                        st.metric("Type", type_disjoncteur)
+                    with col_res3:
+                        st.metric("Courbe", courbe_declenchement)
+                        
+                        # Couleur selon le calibre
+                        if calibre_recommande <= 16:
+                            couleur_protection = "🟢 Vert"
+                        elif calibre_recommande <= 63:
+                            couleur_protection = "🟡 Jaune"
+                        else:
+                            couleur_protection = "🔴 Rouge"
+                        st.write(f"Indication: {couleur_protection}")
+                    
+                    st.markdown("---")
+                    st.markdown("**📋 Notes importantes:**")
+                    st.write(f"• {note_specifique}")
+                    st.write(f"• Pouvoir de coupure: minimum {tension_protection * 10} A")
+                    st.write(f"• Vérifiez la compatibilité DC/AC selon votre installation")
+            
+            # Calculateur d'autonomie
+            with calc_tab3:
+                st.markdown("### 🔋 Calculateur d'Autonomie")
+                st.info("Calculez l'autonomie de votre système en fonction des batteries et de la consommation.")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Configuration batteries**")
+                    capacite_batterie = st.number_input("Capacité unitaire (Ah)", min_value=1, max_value=1000, value=100, step=10)
+                    tension_batterie = st.selectbox("Tension batterie (V)", [12, 24, 48], index=0)
+                    nb_batteries = st.number_input("Nombre de batteries", min_value=1, max_value=20, value=4, step=1)
+                    type_batterie_auto = st.selectbox("Type de batterie", ["Plomb", "AGM", "GEL", "Lithium", "Lithium HV"])
+                    
+                with col2:
+                    st.markdown("**Consommation**")
+                    consommation_jour = st.number_input("Consommation journalière (kWh)", min_value=0.1, max_value=100.0, value=5.0, step=0.1)
+                    jours_autonomie_souhaite = st.number_input("Jours d'autonomie souhaités", min_value=1, max_value=10, value=3, step=1)
+                    rendement_onduleur = st.slider("Rendement onduleur (%)", min_value=80, max_value=98, value=90, step=1)
+                
+                if st.button("🔍 Calculer l'autonomie", type="primary"):
+                    # Paramètres selon le type de batterie
+                    if type_batterie_auto in ["Plomb", "AGM"]:
+                        decharge_max = 50  # 50% pour plomb/AGM
+                        rendement_batterie = 85
+                    elif type_batterie_auto == "GEL":
+                        decharge_max = 60  # 60% pour GEL
+                        rendement_batterie = 88
+                    elif type_batterie_auto in ["Lithium", "Lithium HV"]:
+                        decharge_max = 90  # 90% pour Lithium
+                        rendement_batterie = 95
+                    
+                    # Calculs
+                    capacite_totale_ah = capacite_batterie * nb_batteries
+                    capacite_totale_kwh = (capacite_totale_ah * tension_batterie) / 1000
+                    capacite_utilisable_kwh = capacite_totale_kwh * (decharge_max / 100)
+                    
+                    # Consommation réelle avec pertes
+                    consommation_reelle = consommation_jour / (rendement_onduleur / 100) / (rendement_batterie / 100)
+                    
+                    # Autonomie réelle
+                    autonomie_jours = capacite_utilisable_kwh / consommation_reelle
+                    
+                    # Capacité recommandée pour l'autonomie souhaitée
+                    capacite_recommandee_kwh = consommation_reelle * jours_autonomie_souhaite
+                    capacite_recommandee_ah = (capacite_recommandee_kwh * 1000) / tension_batterie
+                    nb_batteries_recommande = math.ceil(capacite_recommandee_ah / capacite_batterie)
+                    
+                    # Affichage des résultats
+                    st.success("✅ Calcul terminé")
+                    
+                    col_res1, col_res2, col_res3 = st.columns(3)
+                    with col_res1:
+                        st.metric("Capacité totale", f"{capacite_totale_kwh:.1f} kWh")
+                        st.metric("Capacité utilisable", f"{capacite_utilisable_kwh:.1f} kWh")
+                    with col_res2:
+                        st.metric("**Autonomie réelle**", f"**{autonomie_jours:.1f} jours**")
+                        st.metric("Consommation avec pertes", f"{consommation_reelle:.2f} kWh/j")
+                    with col_res3:
+                        if autonomie_jours < jours_autonomie_souhaite:
+                            st.metric("Batteries recommandées", f"{nb_batteries_recommande} unités", delta=f"+{nb_batteries_recommande - nb_batteries}")
+                        else:
+                            st.metric("Configuration", "✅ Suffisante")
+                        st.metric("Décharge max", f"{decharge_max}%")
+                    
+                    # Graphique d'autonomie
+                    st.markdown("---")
+                    st.markdown("**📊 Évolution de l'autonomie:**")
+                    
+                    # Simulation sur plusieurs jours
+                    jours = list(range(0, int(autonomie_jours) + 1))
+                    capacite_restante = [capacite_utilisable_kwh - (consommation_reelle * j) for j in jours]
+                    capacite_restante = [max(0, c) for c in capacite_restante]  # Pas en dessous de 0
+                    
+                    chart_data = pd.DataFrame({
+                        'Jour': jours,
+                        'Capacité restante (kWh)': capacite_restante
+                    })
+                    
+                    st.line_chart(chart_data.set_index('Jour'))
+                    
+                    # Recommandations
+                    st.markdown("**💡 Recommandations:**")
+                    if autonomie_jours < 2:
+                        st.warning("⚠️ Autonomie faible - Augmentez la capacité des batteries")
+                    elif autonomie_jours > 5:
+                        st.info("ℹ️ Autonomie élevée - Configuration optimale pour sites isolés")
+                    else:
+                        st.success("✅ Autonomie correcte pour usage standard")
+            
+            # Calculateur de dimensionnement rapide
+            with calc_tab4:
+                st.markdown("### 📐 Dimensionnement Rapide")
+                st.info("Estimation rapide des composants principaux pour une installation solaire.")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Besoins énergétiques**")
+                    consommation_rapide = st.number_input("Consommation journalière (kWh)", min_value=0.1, max_value=100.0, value=8.0, step=0.1)
+                    autonomie_rapide = st.selectbox("Autonomie souhaitée", ["1 jour", "2 jours", "3 jours", "5 jours"], index=2)
+                    region = st.selectbox("Région", ["Dakar", "Thiès", "Saint-Louis", "Kaolack", "Ziguinchor", "Tambacounda"], index=0)
+                    
+                with col2:
+                    st.markdown("**Type d'installation**")
+                    type_installation = st.selectbox("Type", ["Résidentiel", "Commercial", "Industriel"], index=0)
+                    backup_reseau = st.checkbox("Backup réseau électrique", value=True)
+                    marge_securite = st.slider("Marge de sécurité (%)", min_value=10, max_value=50, value=20, step=5)
+                
+                if st.button("🔍 Dimensionner rapidement", type="primary"):
+                    # Paramètres par région (heures d'ensoleillement moyen)
+                    ensoleillement = {
+                        "Dakar": 5.5, "Thiès": 5.8, "Saint-Louis": 6.2,
+                        "Kaolack": 5.9, "Ziguinchor": 5.3, "Tambacounda": 6.0
+                    }
+                    
+                    # Facteurs selon le type d'installation
+                    facteurs = {
+                        "Résidentiel": {"rendement": 0.85, "facteur_charge": 0.7},
+                        "Commercial": {"rendement": 0.88, "facteur_charge": 0.8},
+                        "Industriel": {"rendement": 0.90, "facteur_charge": 0.9}
+                    }
+                    
+                    # Calculs
+                    heures_soleil = ensoleillement[region]
+                    rendement_systeme = facteurs[type_installation]["rendement"]
+                    facteur_charge = facteurs[type_installation]["facteur_charge"]
+                    
+                    # Puissance panneaux
+                    consommation_avec_marge = consommation_rapide * (1 + marge_securite / 100)
+                    puissance_panneaux_kwc = consommation_avec_marge / (heures_soleil * rendement_systeme)
+                    
+                    # Nombre de panneaux (en supposant 400W par panneau)
+                    puissance_panneau_unitaire = 0.4  # 400W
+                    nb_panneaux = math.ceil(puissance_panneaux_kwc / puissance_panneau_unitaire)
+                    puissance_reelle_kwc = nb_panneaux * puissance_panneau_unitaire
+                    
+                    # Batteries
+                    jours_auto = int(autonomie_rapide.split()[0])
+                    capacite_batterie_kwh = consommation_avec_marge * jours_auto / 0.8  # 80% de décharge max
+                    
+                    # Onduleur (puissance de pointe estimée)
+                    puissance_onduleur_w = consommation_rapide * 1000 * facteur_charge
+                    
+                    # Régulateur MPPT
+                    tension_systeme = 48 if puissance_panneaux_kwc > 3 else (24 if puissance_panneaux_kwc > 1.5 else 12)
+                    courant_panneaux = (puissance_reelle_kwc * 1000) / tension_systeme
+                    amperage_regulateur = math.ceil(courant_panneaux * 1.25)  # Marge 25%
+                    
+                    # Affichage des résultats
+                    st.success("✅ Dimensionnement terminé")
+                    
+                    # Résultats principaux
+                    col_res1, col_res2 = st.columns(2)
+                    
+                    with col_res1:
+                        st.markdown("**🌞 Panneaux solaires**")
+                        st.metric("Puissance totale", f"{puissance_reelle_kwc:.1f} kWc")
+                        st.metric("Nombre de panneaux", f"{nb_panneaux} x 400W")
+                        st.metric("Production journalière", f"{puissance_reelle_kwc * heures_soleil * rendement_systeme:.1f} kWh")
+                        
+                        st.markdown("**🔋 Batteries**")
+                        st.metric("Capacité recommandée", f"{capacite_batterie_kwh:.1f} kWh")
+                        if tension_systeme == 48:
+                            nb_batteries_48v = math.ceil(capacite_batterie_kwh / 2.4)  # Batteries 48V 50Ah
+                            st.metric("Configuration suggérée", f"{nb_batteries_48v} x 48V 50Ah")
+                        else:
+                            nb_batteries_12v = math.ceil(capacite_batterie_kwh / 1.2)  # Batteries 12V 100Ah
+                            st.metric("Configuration suggérée", f"{nb_batteries_12v} x 12V 100Ah")
+                    
+                    with col_res2:
+                        st.markdown("**🔌 Onduleur**")
+                        st.metric("Puissance recommandée", f"{puissance_onduleur_w:.0f} W")
+                        st.metric("Tension système", f"{tension_systeme} V")
+                        if backup_reseau:
+                            st.metric("Type recommandé", "Hybride")
+                        else:
+                            st.metric("Type recommandé", "Off-Grid")
+                        
+                        st.markdown("**⚡ Régulateur MPPT**")
+                        st.metric("Ampérage recommandé", f"{amperage_regulateur} A")
+                        st.metric("Tension max", f"{tension_systeme * 2} V")
+                    
+                    # Estimation des coûts (approximative)
+                    st.markdown("---")
+                    st.markdown("**💰 Estimation budgétaire (approximative):**")
+                    
+                    # Prix approximatifs en FCFA
+                    prix_panneau_400w = 150000
+                    prix_batterie_kwh = 200000  # Prix moyen par kWh
+                    prix_onduleur_w = 300  # Prix par watt
+                    prix_regulateur_a = 15000  # Prix par ampère
+                    
+                    cout_panneaux = nb_panneaux * prix_panneau_400w
+                    cout_batteries = capacite_batterie_kwh * prix_batterie_kwh
+                    cout_onduleur = puissance_onduleur_w * prix_onduleur_w
+                    cout_regulateur = amperage_regulateur * prix_regulateur_a
+                    cout_accessoires = (cout_panneaux + cout_batteries + cout_onduleur + cout_regulateur) * 0.15  # 15% accessoires
+                    
+                    cout_total = cout_panneaux + cout_batteries + cout_onduleur + cout_regulateur + cout_accessoires
+                    
+                    col_cout1, col_cout2, col_cout3 = st.columns(3)
+                    with col_cout1:
+                        st.metric("Panneaux", f"{cout_panneaux:,.0f} FCFA")
+                        st.metric("Batteries", f"{cout_batteries:,.0f} FCFA")
+                    with col_cout2:
+                        st.metric("Onduleur", f"{cout_onduleur:,.0f} FCFA")
+                        st.metric("Régulateur", f"{cout_regulateur:,.0f} FCFA")
+                    with col_cout3:
+                        st.metric("Accessoires", f"{cout_accessoires:,.0f} FCFA")
+                        st.metric("**TOTAL**", f"**{cout_total:,.0f} FCFA**")
+                    
+                    st.caption("💡 Prix indicatifs - Demandez un devis détaillé pour votre projet spécifique")
+
             # Historique déplacé dans l'onglet Admin → 🕘 Historique
 
 st.markdown("---")
