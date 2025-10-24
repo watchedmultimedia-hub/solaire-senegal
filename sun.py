@@ -322,7 +322,7 @@ Réponds de manière claire et pratique en français, avec des conseils adaptés
         data = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25)."},
+                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25, +221 78 177 39 26, +221 77 250 47 90)."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7
@@ -366,8 +366,9 @@ IMPORTANT: Tu représentes et recommandes Energie Solaire Sénégal, notre parte
 Informations du partenaire à mentionner quand approprié:
 - Nom: Energie Solaire Sénégal
 - Adresse: Castor 221 Dakar, Sénégal (en face du terrain de Football)
+- Adresse 2: Zac Mbao (pres du rond point AXA)
 - Email: energiesolairesenegal@gmail.com
-- Téléphones: +221 77 631 42 25 ou +221 78 177 39 26
+- Téléphones: +221 77 631 42 25 ou +221 78 177 39 26 ou +221 77 250 47 90
 - Site web: energiesolairesenegal.com
 
 Pour les commandes, devis personnalisés ou installations, dirige toujours vers Energie Solaire Sénégal.
@@ -379,7 +380,7 @@ Réponds de manière claire et pratique en français, avec des conseils adaptés
         data = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25)."},
+                {"role": "system", "content": "Tu es un expert en installations solaires au Sénégal représentant Energie Solaire Sénégal. Tu aides les utilisateurs à comprendre leurs besoins en énergie solaire et à choisir les bons équipements. Pour les commandes et installations, dirige vers Energie Solaire Sénégal (energiesolairesenegal@gmail.com, +221 77 631 42 25, +221 78 177 39 26, +221 77 250 47 90)."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7,
@@ -887,13 +888,15 @@ with st.sidebar:
     🥇 **Premier outil de dimensionnement solaire en ligne au Sénégal**
     
     📍 **Adresse :** Castor 221 Dakar, Sénégal  
-    (En face du terrain de Football)
-    
+    (En face du terrain de Football)  
+    Zac Mbao (pres du rond point AXA)
+
     📧 **Email :** energiesolairesenegal@gmail.com
-    
+
     📞 **Téléphones :**  
     • +221 77 631 42 25  
-    • +221 78 177 39 26
+    • +221 78 177 39 26  
+    • +221 77 250 47 90
     
     🌐 **Site web :** [energiesolairesenegal.com](https://energiesolairesenegal.com)
     """)
@@ -2284,7 +2287,8 @@ with tab_contact:
             st.markdown("""
             **🏠 Adresse :**  
             Castor 221 Dakar, Sénégal  
-            *(En face du terrain de Football)*
+            *(En face du terrain de Football)*  
+            Zac Mbao (pres du rond point AXA)
             
             **📧 Email :**  
             energiesolairesenegal@gmail.com
@@ -2294,7 +2298,8 @@ with tab_contact:
             st.markdown("""
             **📞 Téléphones :**  
             • +221 77 631 42 25  
-            • +221 78 177 39 26
+            • +221 78 177 39 26  
+            • +221 77 250 47 90
             
             **🌐 Site web :**  
             [energiesolairesenegal.com](https://energiesolairesenegal.com)
@@ -2351,10 +2356,10 @@ with tab_contact:
     
     Pour commander votre installation solaire ou obtenir un devis personnalisé :
     
-    1. **📞 Appelez-nous** : +221 77 631 42 25 ou +221 78 177 39 26
+    1. **📞 Appelez-nous** : +221 77 631 42 25, +221 78 177 39 26 ou +221 77 250 47 90
     2. **📧 Envoyez-nous un email** : energiesolairesenegal@gmail.com
     3. **🌐 Visitez notre site** : [energiesolairesenegal.com](https://energiesolairesenegal.com)
-    4. **🏠 Rendez-vous sur place** : Castor 221 Dakar (en face du terrain de Football)
+    4. **🏠 Rendez-vous sur place** : Castor 221 Dakar (en face du terrain de Football) ou Zac Mbao (pres du rond point AXA)
     """)
     
     # Formulaire de contact rapide
@@ -2395,6 +2400,7 @@ with tab_contact:
                 **En attendant, vous pouvez nous joindre directement :**
                 - 📞 +221 77 631 42 25
                 - 📞 +221 78 177 39 26
+                - 📞 +221 77 250 47 90
                 - 📧 energiesolairesenegal@gmail.com
                 """)
             else:
