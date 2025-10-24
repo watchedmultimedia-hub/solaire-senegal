@@ -559,7 +559,7 @@ def calculer_dimensionnement(consommation_journaliere, autonomie_jours=1, voltag
     # On dimensionne la batterie sur la fraction nocturne de la consommation
     profondeur_decharge = decharge_max.get(type_batterie, 0.7)
     efficacite_batterie = efficacite_batterie_map.get(type_batterie, 0.85 if type_batterie in ("Plomb", "AGM", "GEL") else 0.93)
-    consommation_nocturne = consommation_journaliere * max(0.1, min(part_nuit, 1.0))
+    consommation_nocturne = consommation_journaliere * max(0.1, min(part_nuit/100.0, 1.0))
     capacite_batterie = (consommation_nocturne * autonomie_jours * 1000) / (voltage * max(profondeur_decharge, 0.01) * max(efficacite_batterie, 0.01))
 
     # Puissance onduleur (fraction de la conso journalière)
@@ -1213,8 +1213,11 @@ with tab1:
         
         # Répartition jour/nuit et week-end
         with st.expander("🌙 Répartition jour/nuit et week-end", expanded=False):
-            part_jour = st.slider("Part jour (%)", 0, 100, 45, step=1, help="Pour ménages: nuit souvent plus élevée")
+            part_jour = st.slider("Part jour (%)", 0, 100, 40, step=1, help="Pour ménages: nuit souvent plus élevée")
             part_nuit = 100 - part_jour
+            # Stocker dans session_state pour accès global
+            st.session_state.part_jour = part_jour
+            st.session_state.part_nuit = part_nuit
             facteur_weekend = st.slider("Facteur week-end (%)", 80, 150, 110, step=5, help="Ex: 110% = +10% de conso le week-end")
             # Moyenne jour/nuit en tenant compte du week-end (5 jours semaine + 2 jours weekend)
             conso_jour_semaine = consommation_finale * (part_jour/100) * 5
@@ -1370,7 +1373,7 @@ with tab1:
                 else:
                     st.session_state["solar_hours_override"] = None
 
-                dim = calculer_dimensionnement(consommation_couverte, voltage=voltage, type_batterie=type_batterie)
+                dim = calculer_dimensionnement(consommation_couverte, voltage=voltage, type_batterie=type_batterie, part_nuit=part_nuit)
                 
                 # Choix utilisateur
                 choix_utilisateur = {
@@ -1397,89 +1400,628 @@ with tab1:
                 
             # Affichage des résultats
             st.markdown("---")
-            st.markdown("## 📊 Résultats du Dimensionnement")
+            
+            # En-tête amélioré avec design attractif
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #4CAF50, #45a049); padding: 20px; border-radius: 15px; margin: 20px 0; box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);">
+                <h2 style="color: white; margin: 0; text-align: center; font-size: 28px;">
+                    🎯 Résultats du Dimensionnement
+                </h2>
+                <p style="color: #E8F5E8; text-align: center; margin: 10px 0 0 0; font-size: 16px;">
+                    Votre installation solaire personnalisée pour le Sénégal
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Résumé rapide du système
+            autonomie_reelle = st.session_state.get('autonomie_reelle_pct', st.session_state.get('autonomie_pct', 100))
+            production_kwh = st.session_state.get('production_solaire_kwh_j', st.session_state.get('consommation_couverte', st.session_state.consommation))
+            
+            col_info1, col_info2, col_info3 = st.columns(3)
+            with col_info1:
+                st.info(f"🏠 **Consommation:** {st.session_state.consommation:.1f} kWh/jour")
+            with col_info2:
+                st.info(f"⚡ **Production estimée:** {production_kwh:.1f} kWh/jour")
+            with col_info3:
+                autonomie_color = "🟢" if autonomie_reelle >= 90 else "🟡" if autonomie_reelle >= 70 else "🔴"
+                st.info(f"{autonomie_color} **Autonomie:** {autonomie_reelle:.0f}%")
+            
+            # Métriques principales avec design amélioré
+            st.markdown("### 🔧 Équipements Dimensionnés")
             
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.metric(
-                    "🌞 Panneaux Solaires",
-                    f"{dim['puissance_panneaux']:.0f} Wc",
-                    help="Puissance crête totale nécessaire"
-                )
+                # Panneaux solaires avec indicateurs visuels
+                puissance_kw = dim['puissance_panneaux'] / 1000.0
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #FF9800, #F57C00); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center;">
+                    <h3 style="margin: 0; font-size: 18px;">🌞 Panneaux Solaires</h3>
+                    <h2 style="margin: 5px 0; font-size: 24px;">{dim['puissance_panneaux']:.0f} Wc</h2>
+                    <p style="margin: 0; font-size: 14px; opacity: 0.9;">({puissance_kw:.1f} kWc)</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
                 panneau_nom, nb = equip["panneau"]
                 if panneau_nom:
-                    st.info(f"**{nb} x {panneau_nom}**")
-                    surface_dim_m2 = (dim['puissance_panneaux'] / 1000.0) * SURFACE_PAR_KWC_M2
-                    surface_dim_m2 = surface_dim_m2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT / 100.0)
-                    st.caption(f"Surface panneaux approx.: ~{surface_dim_m2:.1f} m²")
+                    st.success(f"✅ **{nb} x {panneau_nom}**")
+                    surface_dim_m2 = puissance_kw * SURFACE_PAR_KWC_M2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT / 100.0)
+                    st.caption(f"📐 Surface nécessaire: ~{surface_dim_m2:.1f} m²")
+                    
+                    # Indicateur de qualité du panneau
+                    if "Monocristallin" in panneau_nom:
+                        st.caption("🏆 Technologie Monocristallin - Haut rendement")
+                    else:
+                        st.caption("💎 Technologie Polycristallin - Bon rapport qualité/prix")
             
             with col2:
-                st.metric(
-                    "🔋 Batteries",
-                    f"{dim['capacite_batterie']:.0f} Ah",
-                    help=f"Capacité à {voltage}V avec décharge max {dim['profondeur_decharge']:.0f}%"
-                )
+                # Batteries avec indicateurs de performance
+                capacite_kwh = (dim['capacite_batterie'] * voltage) / 1000.0
+                autonomie_jours = capacite_kwh / st.session_state.consommation
+                
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #2196F3, #1976D2); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center;">
+                    <h3 style="margin: 0; font-size: 18px;">🔋 Batteries</h3>
+                    <h2 style="margin: 5px 0; font-size: 24px;">{dim['capacite_batterie']:.0f} Ah</h2>
+                    <p style="margin: 0; font-size: 14px; opacity: 0.9;">({capacite_kwh:.1f} kWh à {voltage}V)</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
                 batterie_nom, nb = equip["batterie"]
                 if batterie_nom:
-                    st.info(f"**{nb} x {batterie_nom}**")
+                    st.success(f"✅ **{nb} x {batterie_nom}**")
+                    st.caption(f"⏱️ Autonomie théorique: ~{autonomie_jours:.1f} jours")
+                    st.caption(f"🔄 Décharge max: {dim['profondeur_decharge']:.0f}%")
+                    
+                    # Indicateur de qualité de la batterie
+                    type_batterie = st.session_state.choix['type_batterie']
+                    if type_batterie == "Lithium":
+                        st.caption("🚀 Lithium - Durée de vie 10-12 ans")
+                    elif type_batterie == "GEL":
+                        st.caption("⭐ GEL - Durée de vie 5-7 ans")
+                    elif type_batterie == "AGM":
+                        st.caption("👍 AGM - Bon compromis pour le Sénégal")
+                    else:
+                        st.caption("⚠️ Plomb - Entretien requis")
             
             with col3:
-                st.metric(
-                    "⚡ Onduleur",
-                    f"{dim['puissance_onduleur']:.0f} W",
-                    help="Puissance de l'onduleur"
-                )
+                # Onduleur avec indicateurs de capacité
+                puissance_kw_ond = dim['puissance_onduleur'] / 1000.0
+                marge_puissance = (dim['puissance_onduleur'] / (st.session_state.consommation * 1000 / 24)) * 100
+                
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #9C27B0, #7B1FA2); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center;">
+                    <h3 style="margin: 0; font-size: 18px;">⚡ Onduleur</h3>
+                    <h2 style="margin: 5px 0; font-size: 24px;">{dim['puissance_onduleur']:.0f} W</h2>
+                    <p style="margin: 0; font-size: 14px; opacity: 0.9;">({puissance_kw_ond:.1f} kW)</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
                 if equip["onduleur"]:
-                    st.info(f"**{equip['onduleur']}**")
+                    st.success(f"✅ **{equip['onduleur']}**")
+                    
+                    # Indicateur de marge de puissance
+                    if marge_puissance >= 150:
+                        st.caption("🟢 Excellente marge de puissance")
+                    elif marge_puissance >= 120:
+                        st.caption("🟡 Bonne marge de puissance")
+                    else:
+                        st.caption("🔴 Marge de puissance juste")
+                    
+                    # Type d'onduleur
+                    type_onduleur = st.session_state.choix['type_onduleur']
+                    if type_onduleur == "Hybride":
+                        st.caption("🔄 Hybride - MPPT intégré")
+                    elif type_onduleur == "Online":
+                        st.caption("🏆 Online - Qualité premium")
+                    else:
+                        st.caption("⚡ Off-Grid - Solution basique")
+                
+            # 📊 Indicateurs de performance du système
+            st.markdown("---")
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #E3F2FD, #BBDEFB); padding: 20px; border-radius: 15px; margin: 20px 0; border-left: 5px solid #2196F3;">
+                <h3 style="color: #1976D2; margin: 0 0 15px 0; display: flex; align-items: center;">
+                    📊 Indicateurs de Performance & Efficacité
+                </h3>
+                <p style="color: #424242; margin: 0; font-size: 14px;">
+                    Analyse détaillée des performances de votre installation solaire
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Calculs des indicateurs
+            production_annuelle_kwh = (st.session_state.production_solaire_kwh_j if 'production_solaire_kwh_j' in st.session_state else st.session_state.consommation) * 365
+            consommation_annuelle_kwh = st.session_state.consommation * 365
+            taux_autosuffisance = min(100, (production_annuelle_kwh / consommation_annuelle_kwh) * 100)
+            
+            # Efficacité énergétique
+            kWc = dim['puissance_panneaux'] / 1000.0
+            rendement_specifique = production_annuelle_kwh / kWc if kWc > 0 else 0
+            
+            # Facteur de charge
+            facteur_charge = (production_annuelle_kwh / (kWc * 8760)) * 100 if kWc > 0 else 0
+            
+            # Impact environnemental
+            co2_evite_kg = production_annuelle_kwh * 0.82  # 0.82 kg CO2/kWh évité au Sénégal
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                # Taux d'autosuffisance
+                color_auto = "#4CAF50" if taux_autosuffisance >= 80 else "#FF9800" if taux_autosuffisance >= 60 else "#F44336"
+                st.markdown(f"""
+                <div style="background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; border-left: 4px solid {color_auto};">
+                    <div style="font-size: 32px; font-weight: bold; color: {color_auto}; margin-bottom: 8px;">
+                        {taux_autosuffisance:.1f}%
+                    </div>
+                    <div style="font-size: 16px; font-weight: 600; color: #333; margin-bottom: 5px;">
+                        Taux d'Autosuffisance
+                    </div>
+                    <div style="font-size: 12px; color: #666;">
+                        {"🟢 Excellent" if taux_autosuffisance >= 80 else "🟡 Bon" if taux_autosuffisance >= 60 else "🔴 À améliorer"}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            with col2:
+                # Rendement spécifique
+                color_rend = "#4CAF50" if rendement_specifique >= 1200 else "#FF9800" if rendement_specifique >= 1000 else "#F44336"
+                st.markdown(f"""
+                <div style="background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; border-left: 4px solid {color_rend};">
+                    <div style="font-size: 32px; font-weight: bold; color: {color_rend}; margin-bottom: 8px;">
+                        {rendement_specifique:.0f}
+                    </div>
+                    <div style="font-size: 16px; font-weight: 600; color: #333; margin-bottom: 5px;">
+                        Rendement Spécifique
+                    </div>
+                    <div style="font-size: 12px; color: #666;">
+                        kWh/kWc/an - {"🟢 Optimal" if rendement_specifique >= 1200 else "🟡 Correct" if rendement_specifique >= 1000 else "🔴 Faible"}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            with col3:
+                # Facteur de charge
+                color_fc = "#4CAF50" if facteur_charge >= 15 else "#FF9800" if facteur_charge >= 12 else "#F44336"
+                st.markdown(f"""
+                <div style="background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; border-left: 4px solid {color_fc};">
+                    <div style="font-size: 32px; font-weight: bold; color: {color_fc}; margin-bottom: 8px;">
+                        {facteur_charge:.1f}%
+                    </div>
+                    <div style="font-size: 16px; font-weight: 600; color: #333; margin-bottom: 5px;">
+                        Facteur de Charge
+                    </div>
+                    <div style="font-size: 12px; color: #666;">
+                        {"🟢 Très bon" if facteur_charge >= 15 else "🟡 Acceptable" if facteur_charge >= 12 else "🔴 Sous-optimal"}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Indicateurs supplémentaires en ligne
+            st.markdown("<br>", unsafe_allow_html=True)
+            col4, col5 = st.columns(2)
+            
+            with col4:
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #E8F5E8, #C8E6C9); padding: 15px; border-radius: 10px; border-left: 4px solid #4CAF50;">
+                    <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                        <span style="font-size: 20px; margin-right: 10px;">🌱</span>
+                        <span style="font-weight: 600; color: #2E7D32;">Impact Environnemental</span>
+                    </div>
+                    <div style="color: #388E3C; font-size: 14px;">
+                        <strong>{co2_evite_kg:.0f} kg CO₂</strong> évités par an<br>
+                        Équivalent à <strong>{co2_evite_kg/22:.1f} arbres</strong> plantés
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            with col5:
+                duree_vie_systeme = 20  # années
+                production_totale_vie = production_annuelle_kwh * duree_vie_systeme
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #FFF3E0, #FFE0B2); padding: 15px; border-radius: 10px; border-left: 4px solid #FF9800;">
+                    <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                        <span style="font-size: 20px; margin-right: 10px;">⚡</span>
+                        <span style="font-weight: 600; color: #F57C00;">Production sur 20 ans</span>
+                    </div>
+                    <div style="color: #EF6C00; font-size: 14px;">
+                        <strong>{production_totale_vie:,.0f} kWh</strong> au total<br>
+                        Soit <strong>{production_totale_vie/1000:.1f} MWh</strong> d'énergie propre
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
                 
             # 📅 Simulateur de production mensuelle (Sénégal)
+            st.markdown("---")
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #FFF8E1, #FFECB3); padding: 20px; border-radius: 15px; margin: 20px 0; border-left: 5px solid #FFC107;">
+                <h3 style="color: #F57C00; margin: 0 0 15px 0; display: flex; align-items: center;">
+                    📅 Simulateur de Production Mensuelle
+                </h3>
+                <p style="color: #424242; margin: 0; font-size: 14px;">
+                    Prévisions détaillées basées sur l'ensoleillement sénégalais et les conditions climatiques locales
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
             kWc = dim['puissance_panneaux'] / 1000.0
+            
+            # Données d'ensoleillement détaillées pour le Sénégal
             heures_par_jour = {
                 'Jan': 6.2, 'Fév': 6.5, 'Mar': 6.7, 'Avr': 6.6, 'Mai': 6.5, 'Juin': 6.0,
                 'Juil': 5.5, 'Août': 5.4, 'Sep': 5.8, 'Oct': 6.0, 'Nov': 6.2, 'Déc': 6.1
             }
             jours_mois = {'Jan':31,'Fév':28,'Mar':31,'Avr':30,'Mai':31,'Juin':30,'Juil':31,'Août':31,'Sep':30,'Oct':31,'Nov':30,'Déc':31}
-            PR = 0.80
+            
+            # Facteurs de performance selon les conditions sénégalaises
+            PR = 0.80  # Performance Ratio moyen
+            facteurs_saisonniers = {
+                'Jan': 0.95, 'Fév': 0.95, 'Mar': 0.90, 'Avr': 0.85, 'Mai': 0.80, 'Juin': 0.75,  # Saison sèche à chaude
+                'Juil': 0.70, 'Août': 0.70, 'Sep': 0.75, 'Oct': 0.85, 'Nov': 0.90, 'Déc': 0.95   # Saison des pluies et retour
+            }
 
             data = []
+            production_totale = 0
             for m in heures_par_jour:
-                prod = kWc * heures_par_jour[m] * PR * jours_mois[m]
-                data.append({'Mois': m, 'Production (kWh)': round(prod, 2)})
+                # Production de base
+                prod_base = kWc * heures_par_jour[m] * PR * jours_mois[m]
+                # Application du facteur saisonnier (température, humidité, poussière)
+                prod_ajustee = prod_base * facteurs_saisonniers[m]
+                production_totale += prod_ajustee
+                
+                # Calcul du taux de couverture mensuel
+                conso_mensuelle = st.session_state.consommation * jours_mois[m]
+                taux_couverture = min(100, (prod_ajustee / conso_mensuelle) * 100)
+                
+                data.append({
+                    'Mois': m, 
+                    'Production (kWh)': round(prod_ajustee, 1),
+                    'Consommation (kWh)': round(conso_mensuelle, 1),
+                    'Taux de couverture (%)': round(taux_couverture, 1),
+                    'Ensoleillement (h/j)': heures_par_jour[m],
+                    'Facteur saisonnier': facteurs_saisonniers[m]
+                })
 
             df_prod = pd.DataFrame(data)
-
-            st.subheader("📅 Simulateur de production mensuelle")
-            st.bar_chart(df_prod.set_index('Mois'))
-
-            st.caption("Estimation basée sur l'ensoleillement moyen au Sénégal; impact saison des pluies intégré.")
+            
+            # Affichage du graphique principal avec Plotly pour plus d'interactivité
+            try:
+                import plotly.graph_objects as go
+                from plotly.subplots import make_subplots
+                
+                # Création du graphique combiné
+                fig = make_subplots(
+                    rows=2, cols=1,
+                    subplot_titles=('Production vs Consommation Mensuelle', 'Taux de Couverture Mensuel'),
+                    vertical_spacing=0.15,
+                    row_heights=[0.7, 0.3]
+                )
+                
+                # Graphique 1: Production vs Consommation
+                fig.add_trace(
+                    go.Bar(
+                        x=df_prod['Mois'],
+                        y=df_prod['Production (kWh)'],
+                        name='Production solaire',
+                        marker_color='#FFC107',
+                        hovertemplate='<b>%{x}</b><br>Production: %{y:.1f} kWh<br>Ensoleillement: %{customdata:.1f}h/j<extra></extra>',
+                        customdata=df_prod['Ensoleillement (h/j)']
+                    ),
+                    row=1, col=1
+                )
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_prod['Mois'],
+                        y=df_prod['Consommation (kWh)'],
+                        mode='lines+markers',
+                        name='Consommation',
+                        line=dict(color='#F44336', width=3),
+                        marker=dict(size=8),
+                        hovertemplate='<b>%{x}</b><br>Consommation: %{y:.1f} kWh<extra></extra>'
+                    ),
+                    row=1, col=1
+                )
+                
+                # Graphique 2: Taux de couverture
+                colors = ['#4CAF50' if x >= 100 else '#FF9800' if x >= 80 else '#F44336' for x in df_prod['Taux de couverture (%)']]
+                fig.add_trace(
+                    go.Bar(
+                        x=df_prod['Mois'],
+                        y=df_prod['Taux de couverture (%)'],
+                        name='Taux de couverture',
+                        marker_color=colors,
+                        hovertemplate='<b>%{x}</b><br>Couverture: %{y:.1f}%<br>Facteur saisonnier: %{customdata:.2f}<extra></extra>',
+                        customdata=df_prod['Facteur saisonnier'],
+                        showlegend=False
+                    ),
+                    row=2, col=1
+                )
+                
+                # Ligne de référence à 100%
+                fig.add_hline(y=100, line_dash="dash", line_color="green", opacity=0.7, row=2, col=1)
+                
+                # Mise en forme
+                fig.update_layout(
+                    height=600,
+                    title_text="📊 Analyse Détaillée de la Production Solaire Mensuelle",
+                    title_x=0.5,
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    hovermode='x unified'
+                )
+                
+                fig.update_xaxes(title_text="Mois", row=2, col=1)
+                fig.update_yaxes(title_text="Énergie (kWh)", row=1, col=1)
+                fig.update_yaxes(title_text="Couverture (%)", row=2, col=1)
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+            except ImportError:
+                # Fallback vers le graphique Streamlit standard si Plotly n'est pas disponible
+                st.bar_chart(df_prod.set_index('Mois')[['Production (kWh)', 'Consommation (kWh)']])
+            
+            # Tableau détaillé
+            with st.expander("📋 Détails mensuels complets", expanded=False):
+                st.dataframe(
+                    df_prod.style.format({
+                        'Production (kWh)': '{:.1f}',
+                        'Consommation (kWh)': '{:.1f}',
+                        'Taux de couverture (%)': '{:.1f}%',
+                        'Ensoleillement (h/j)': '{:.1f}',
+                        'Facteur saisonnier': '{:.2f}'
+                    }),
+                    use_container_width=True
+                )
+            
+            # Résumé des performances annuelles
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown(f"""
+                <div style="background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; border-left: 4px solid #4CAF50;">
+                    <div style="font-size: 24px; font-weight: bold; color: #4CAF50; margin-bottom: 5px;">
+                        {production_totale:,.0f} kWh
+                    </div>
+                    <div style="font-size: 14px; color: #666;">
+                        Production annuelle totale
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            with col2:
+                mois_optimal = df_prod.loc[df_prod['Production (kWh)'].idxmax(), 'Mois']
+                prod_max = df_prod['Production (kWh)'].max()
+                st.markdown(f"""
+                <div style="background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; border-left: 4px solid #FF9800;">
+                    <div style="font-size: 24px; font-weight: bold; color: #FF9800; margin-bottom: 5px;">
+                        {mois_optimal}
+                    </div>
+                    <div style="font-size: 14px; color: #666;">
+                        Meilleur mois ({prod_max:.0f} kWh)
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            with col3:
+                mois_faible = df_prod.loc[df_prod['Production (kWh)'].idxmin(), 'Mois']
+                prod_min = df_prod['Production (kWh)'].min()
+                st.markdown(f"""
+                <div style="background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; border-left: 4px solid #F44336;">
+                    <div style="font-size: 24px; font-weight: bold; color: #F44336; margin-bottom: 5px;">
+                        {mois_faible}
+                    </div>
+                    <div style="font-size: 14px; color: #666;">
+                        Mois le plus faible ({prod_min:.0f} kWh)
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Informations contextuelles
+            st.markdown("""
+            <div style="background: #F5F5F5; padding: 15px; border-radius: 10px; margin: 15px 0;">
+                <h4 style="color: #333; margin: 0 0 10px 0;">🌍 Facteurs climatiques pris en compte :</h4>
+                <ul style="color: #666; margin: 0; padding-left: 20px;">
+                    <li><strong>Saison sèche (Nov-Mai)</strong> : Conditions optimales, facteur 0.80-0.95</li>
+                    <li><strong>Saison des pluies (Juin-Oct)</strong> : Réduction due à l'humidité et aux nuages, facteur 0.70-0.85</li>
+                    <li><strong>Température</strong> : Impact de la chaleur sur le rendement des panneaux</li>
+                    <li><strong>Poussière harmattan</strong> : Réduction temporaire en décembre-février</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
 
             # Régulateur si nécessaire
             if equip["regulateur"]:
                 st.markdown("### 🎛️ Régulateur de charge")
                 st.info(f"**{equip['regulateur']}**")
             
-            # Avertissements et recommandations
+            # Avertissements et recommandations enrichies
             st.markdown("---")
-            st.markdown("### 💡 Recommandations")
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #E8F5E8, #C8E6C9); padding: 20px; border-radius: 15px; margin: 20px 0; border-left: 5px solid #4CAF50;">
+                <h3 style="color: #2E7D32; margin: 0 0 15px 0; display: flex; align-items: center;">
+                    💡 Recommandations Techniques & Pratiques
+                </h3>
+                <p style="color: #424242; margin: 0; font-size: 14px;">
+                    Conseils d'experts pour optimiser votre installation solaire au Sénégal
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
             
+            # Analyse des choix techniques
             col_rec1, col_rec2 = st.columns(2)
             
             with col_rec1:
+                st.markdown("#### 🔋 Analyse de votre choix de batterie")
                 if type_batterie == "Lithium":
-                    st.success("✅ Excellent choix ! Les batteries Lithium durent 3x plus longtemps")
+                    st.markdown("""
+                    <div style="background: #E8F5E8; padding: 15px; border-radius: 10px; border-left: 4px solid #4CAF50;">
+                        <h5 style="color: #2E7D32; margin: 0 0 10px 0;">✅ Excellent choix !</h5>
+                        <ul style="color: #388E3C; margin: 0; padding-left: 20px; font-size: 14px;">
+                            <li><strong>Durée de vie :</strong> 10-12 ans (3x plus que plomb)</li>
+                            <li><strong>Décharge :</strong> 90% utilisable</li>
+                            <li><strong>Maintenance :</strong> Aucune</li>
+                            <li><strong>Poids :</strong> 3x plus léger</li>
+                            <li><strong>ROI :</strong> Rentable sur le long terme</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
                 elif type_batterie == "GEL":
-                    st.success("✅ Très bon choix pour le climat sénégalais")
+                    st.markdown("""
+                    <div style="background: #E8F5E8; padding: 15px; border-radius: 10px; border-left: 4px solid #4CAF50;">
+                        <h5 style="color: #2E7D32; margin: 0 0 10px 0;">✅ Très bon choix pour le Sénégal</h5>
+                        <ul style="color: #388E3C; margin: 0; padding-left: 20px; font-size: 14px;">
+                            <li><strong>Durée de vie :</strong> 5-7 ans</li>
+                            <li><strong>Décharge :</strong> 80% utilisable</li>
+                            <li><strong>Résistance :</strong> Excellente à la chaleur</li>
+                            <li><strong>Maintenance :</strong> Aucune</li>
+                            <li><strong>Idéal pour :</strong> Climat tropical</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
                 elif type_batterie == "AGM":
-                    st.info("👍 Bon compromis qualité/prix pour le Sénégal")
+                    st.markdown("""
+                    <div style="background: #FFF3E0; padding: 15px; border-radius: 10px; border-left: 4px solid #FF9800;">
+                        <h5 style="color: #F57C00; margin: 0 0 10px 0;">👍 Bon compromis qualité/prix</h5>
+                        <ul style="color: #EF6C00; margin: 0; padding-left: 20px; font-size: 14px;">
+                            <li><strong>Durée de vie :</strong> 3-5 ans</li>
+                            <li><strong>Décharge :</strong> 70% utilisable</li>
+                            <li><strong>Avantage :</strong> Charge rapide</li>
+                            <li><strong>Maintenance :</strong> Aucune</li>
+                            <li><strong>Recommandé pour :</strong> Budget moyen</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
                 else:
-                    st.warning("⚠️ Batteries plomb nécessitent un entretien régulier (eau distillée)")
+                    st.markdown("""
+                    <div style="background: #FFEBEE; padding: 15px; border-radius: 10px; border-left: 4px solid #F44336;">
+                        <h5 style="color: #C62828; margin: 0 0 10px 0;">⚠️ Attention : Maintenance requise</h5>
+                        <ul style="color: #D32F2F; margin: 0; padding-left: 20px; font-size: 14px;">
+                            <li><strong>Durée de vie :</strong> 2-3 ans seulement</li>
+                            <li><strong>Décharge :</strong> 50% max (risque de dégâts)</li>
+                            <li><strong>Entretien :</strong> Eau distillée tous les 3 mois</li>
+                            <li><strong>Surveillance :</strong> Niveau d'électrolyte</li>
+                            <li><strong>Coût total :</strong> Plus élevé à long terme</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
             
             with col_rec2:
+                st.markdown("#### ⚡ Analyse de votre système de charge")
                 if type_regulateur == "MPPT" or type_onduleur == "Hybride":
-                    st.success("✅ MPPT recommandé : +30% de rendement")
+                    st.markdown("""
+                    <div style="background: #E8F5E8; padding: 15px; border-radius: 10px; border-left: 4px solid #4CAF50;">
+                        <h5 style="color: #2E7D32; margin: 0 0 10px 0;">✅ MPPT : Choix optimal</h5>
+                        <ul style="color: #388E3C; margin: 0; padding-left: 20px; font-size: 14px;">
+                            <li><strong>Rendement :</strong> +25-30% vs PWM</li>
+                            <li><strong>Suivi :</strong> Point de puissance max</li>
+                            <li><strong>Température :</strong> Compensation automatique</li>
+                            <li><strong>Monitoring :</strong> Données en temps réel</li>
+                            <li><strong>ROI :</strong> Amortissement rapide</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
                 else:
-                    st.info("💡 Conseil : MPPT serait 30% plus efficace")
+                    st.markdown("""
+                    <div style="background: #FFF3E0; padding: 15px; border-radius: 10px; border-left: 4px solid #FF9800;">
+                        <h5 style="color: #F57C00; margin: 0 0 10px 0;">💡 Conseil : Upgrade vers MPPT</h5>
+                        <ul style="color: #EF6C00; margin: 0; padding-left: 20px; font-size: 14px;">
+                            <li><strong>Gain potentiel :</strong> +30% de production</li>
+                            <li><strong>Surtout efficace :</strong> Temps nuageux</li>
+                            <li><strong>Température :</strong> Meilleure gestion chaleur</li>
+                            <li><strong>Investissement :</strong> Rentable rapidement</li>
+                            <li><strong>Évolutivité :</strong> Facilite extensions</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            # Recommandations spécifiques au Sénégal
+            st.markdown("#### 🌍 Recommandations spécifiques au climat sénégalais")
+            
+            col_climat1, col_climat2 = st.columns(2)
+            
+            with col_climat1:
+                st.markdown("""
+                <div style="background: #E3F2FD; padding: 15px; border-radius: 10px; border-left: 4px solid #2196F3;">
+                    <h5 style="color: #1976D2; margin: 0 0 10px 0;">🌡️ Gestion de la température</h5>
+                    <ul style="color: #1565C0; margin: 0; padding-left: 20px; font-size: 14px;">
+                        <li><strong>Ventilation :</strong> Espace 15cm sous panneaux</li>
+                        <li><strong>Orientation :</strong> Éviter exposition directe batteries</li>
+                        <li><strong>Ombrage :</strong> Local technique ventilé</li>
+                        <li><strong>Câblage :</strong> Section adaptée (pertes thermiques)</li>
+                        <li><strong>Monitoring :</strong> Surveillance température batteries</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            with col_climat2:
+                st.markdown("""
+                <div style="background: #F3E5F5; padding: 15px; border-radius: 10px; border-left: 4px solid #9C27B0;">
+                    <h5 style="color: #7B1FA2; margin: 0 0 10px 0;">💧 Protection contre l'humidité</h5>
+                    <ul style="color: #6A1B9A; margin: 0; padding-left: 20px; font-size: 14px;">
+                        <li><strong>Étanchéité :</strong> IP65 minimum pour équipements</li>
+                        <li><strong>Drainage :</strong> Évacuation eau de pluie</li>
+                        <li><strong>Corrosion :</strong> Fixations inox ou galvanisées</li>
+                        <li><strong>Câbles :</strong> Gaines étanches et UV-résistantes</li>
+                        <li><strong>Maintenance :</strong> Inspection post-hivernage</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Conseils de maintenance et optimisation
+            st.markdown("#### 🔧 Plan de maintenance recommandé")
+            
+            maintenance_tabs = st.tabs(["📅 Mensuel", "🔄 Trimestriel", "📋 Annuel"])
+            
+            with maintenance_tabs[0]:
+                st.markdown("""
+                **🗓️ Tâches mensuelles (15 min)**
+                - ✅ Nettoyage panneaux (eau + brosse douce)
+                - ✅ Vérification niveau batteries (si plomb)
+                - ✅ Contrôle visuel câblage
+                - ✅ Relevé production (monitoring)
+                - ✅ Test fonctionnement onduleur
+                """)
+                
+            with maintenance_tabs[1]:
+                st.markdown("""
+                **🔄 Tâches trimestrielles (30 min)**
+                - 🔧 Serrage connexions électriques
+                - 🔧 Nettoyage bornes batteries
+                - 🔧 Vérification fixations panneaux
+                - 🔧 Test alarmes et protections
+                - 🔧 Calibrage régulateur (si nécessaire)
+                """)
+                
+            with maintenance_tabs[2]:
+                st.markdown("""
+                **📋 Tâches annuelles (2h - Technicien recommandé)**
+                - 🔬 Test capacité batteries
+                - 🔬 Mesure isolement installation
+                - 🔬 Vérification mise à la terre
+                - 🔬 Contrôle performances vs prévisions
+                - 🔬 Mise à jour firmware équipements
+                """)
+            
+            # Conseils d'optimisation
+            st.markdown("#### 🚀 Conseils d'optimisation énergétique")
+            
+            optimisation_data = [
+                {"Conseil": "Utiliser appareils énergivores en journée", "Économie": "15-20%", "Difficulté": "Facile"},
+                {"Conseil": "Installer minuteries sur éclairage", "Économie": "10-15%", "Difficulté": "Facile"},
+                {"Conseil": "Remplacer ampoules par LED", "Économie": "60-80%", "Difficulté": "Facile"},
+                {"Conseil": "Optimiser température frigo (4-6°C)", "Économie": "10-15%", "Difficulté": "Facile"},
+                {"Conseil": "Ajouter délestage automatique", "Économie": "5-10%", "Difficulté": "Moyen"},
+                {"Conseil": "Installer système de monitoring", "Économie": "5-15%", "Difficulté": "Moyen"}
+            ]
+            
+            df_optim = pd.DataFrame(optimisation_data)
+            st.dataframe(
+                df_optim,
+                use_container_width=True,
+                hide_index=True
+            )
             
             # Section PSH PVGIS séparée
             if st.session_state.get("pvgis_monthly_psh"):
@@ -2254,7 +2796,8 @@ L'utilisateur a dimensionné une installation avec:
             dim_opt = calculer_dimensionnement(
                 consommation_opt,
                 voltage=opt.get('voltage', base_voltage),
-                type_batterie=opt['type_batterie']
+                type_batterie=opt['type_batterie'],
+                part_nuit=st.session_state.get('part_nuit', 55)  # Valeur par défaut si pas encore définie
             )
             choix_opt = {
                 'type_batterie': opt['type_batterie'],
