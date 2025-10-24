@@ -251,7 +251,10 @@ APPAREILS_FAMILLES = {
     ],
     "Climatisation": [
         {"nom": "Climatiseur 1CV 900W", "puissance": 900},
-        {"nom": "Climatiseur 1.5CV 1100W", "puissance": 1100}
+        {"nom": "Climatiseur 1.5CV 1100W", "puissance": 1100},
+        {"nom": "Climatiseur 2CV 1300W", "puissance": 1300},
+        {"nom": "Climatiseur 2.5CV 1500W", "puissance": 1500},
+        {"nom": "Climatiseur 3CV 1700W", "puissance": 1700}
     ],
     "Eau chaude": [
         {"nom": "Chauffe-eau instantané 3000W", "puissance": 3000},
@@ -621,16 +624,31 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
             nb_batteries = int(dimensionnement["capacite_batterie"] / specs["capacite"]) + 1
             batterie_select = nom_batterie
     
-    # Sélection onduleur selon le type choisi
+    # Sélection onduleur selon le type choisi avec couplage si nécessaire
     onduleur_select = None
+    nb_onduleurs = 1
     onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
-                        if type_onduleur in v["type"] and v["voltage"] == voltage_systeme}
+                        if type_onduleur == v["type"] and v["voltage"] == voltage_systeme}
     
     if onduleurs_filtres:
+        # Essayer d'abord un seul onduleur
         for nom, specs in sorted(onduleurs_filtres.items(), key=lambda x: x[1]["puissance"]):
             if specs["puissance"] >= dimensionnement["puissance_onduleur"]:
                 onduleur_select = nom
                 break
+        
+        # Si aucun onduleur unique ne suffit, essayer le couplage
+        if not onduleur_select:
+            # Prendre l'onduleur le plus puissant disponible
+            onduleur_max = max(onduleurs_filtres.items(), key=lambda x: x[1]["puissance"])
+            nom_max, specs_max = onduleur_max
+            
+            # Calculer le nombre d'onduleurs nécessaires
+            nb_onduleurs = int(dimensionnement["puissance_onduleur"] / specs_max["puissance"]) + 1
+            
+            # Limiter à 4 onduleurs maximum pour des raisons pratiques
+            if nb_onduleurs <= 4:
+                onduleur_select = nom_max
     
     # Sélection régulateur (seulement si onduleur pas hybride)
     regulateur_select = None
@@ -649,7 +667,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     return {
         "panneau": (puissance_panneau_select, nb_panneaux),
         "batterie": (batterie_select, nb_batteries),
-        "onduleur": onduleur_select,
+        "onduleur": (onduleur_select, nb_onduleurs),
         "regulateur": regulateur_select,
     }
 
@@ -774,27 +792,44 @@ def calculer_devis(equipements, use_online=False, accessoires_rate=0.15, region_
             "url_source": url_source
         })
     
-    # Onduleur
-    onduleur_nom = equipements["onduleur"]
-    if onduleur_nom:
-        prix_unitaire = prix_equipements["onduleurs"][onduleur_nom]["prix"]
-        source_prix = "local"
-        url_source = None
-        if use_online:
-            prix_site, url_site = obtenir_prix_depuis_site(onduleur_nom)
-            if prix_site:
-                prix_unitaire = prix_site
-                source_prix = "site"
-                url_source = url_site
-        total += prix_unitaire
-        details.append({
-            "item": f"Onduleur {onduleur_nom}",
-            "quantite": 1,
-            "prix_unitaire": prix_unitaire,
-            "sous_total": prix_unitaire,
-            "source_prix": source_prix,
-            "url_source": url_source
-        })
+    # Onduleur(s)
+    onduleur_data = equipements["onduleur"]
+    if onduleur_data:
+        # Gérer le nouveau format avec couplage
+        if isinstance(onduleur_data, tuple):
+            onduleur_nom, nb_onduleurs = onduleur_data
+        else:
+            # Compatibilité avec l'ancien format
+            onduleur_nom = onduleur_data
+            nb_onduleurs = 1
+            
+        if onduleur_nom:
+            prix_unitaire = prix_equipements["onduleurs"][onduleur_nom]["prix"]
+            source_prix = "local"
+            url_source = None
+            if use_online:
+                prix_site, url_site = obtenir_prix_depuis_site(onduleur_nom)
+                if prix_site:
+                    prix_unitaire = prix_site
+                    source_prix = "site"
+                    url_source = url_site
+            sous_total = prix_unitaire * nb_onduleurs
+            total += sous_total
+            
+            # Affichage adapté selon le nombre d'onduleurs
+            if nb_onduleurs > 1:
+                item_name = f"Onduleur {onduleur_nom} (couplage de {nb_onduleurs})"
+            else:
+                item_name = f"Onduleur {onduleur_nom}"
+                
+            details.append({
+                "item": item_name,
+                "quantite": nb_onduleurs,
+                "prix_unitaire": prix_unitaire,
+                "sous_total": sous_total,
+                "source_prix": source_prix,
+                "url_source": url_source
+            })
     
     # Régulateur (si nécessaire)
     regulateur_nom = equipements["regulateur"]
@@ -847,7 +882,7 @@ def calculer_devis(equipements, use_online=False, accessoires_rate=0.15, region_
             pourcentage_main_oeuvre = 20.0  # Valeur par défaut si région non trouvée
         
         # Calculer l'installation et mise en service en pourcentage du coût des équipements
-        cout_installation = total * (pourcentage_main_oeuvre / 100.0)
+        cout_installation = round(total * (pourcentage_main_oeuvre / 100.0))
         
         total += cout_installation
         details.append({
@@ -1492,8 +1527,19 @@ with tab1:
                 </div>
                 """, unsafe_allow_html=True)
                 
-                if equip["onduleur"]:
-                    st.success(f"✅ **{equip['onduleur']}**")
+                onduleur_data = equip["onduleur"]
+                if onduleur_data:
+                    # Gérer le nouveau format avec couplage
+                    if isinstance(onduleur_data, tuple):
+                        onduleur_nom, nb_onduleurs = onduleur_data
+                        if nb_onduleurs > 1:
+                            st.success(f"✅ **{nb_onduleurs} x {onduleur_nom}** (couplage)")
+                            st.caption(f"🔗 Puissance totale: {nb_onduleurs * PRIX_EQUIPEMENTS['onduleurs'][onduleur_nom]['puissance']}W")
+                        else:
+                            st.success(f"✅ **{onduleur_nom}**")
+                    else:
+                        # Compatibilité avec l'ancien format
+                        st.success(f"✅ **{onduleur_data}**")
                     
                     # Indicateur de marge de puissance
                     if marge_puissance >= 150:
@@ -2808,7 +2854,18 @@ L'utilisateur a dimensionné une installation avec:
             devis_opt = calculer_devis(equip_opt, use_online=False, accessoires_rate=float(taux_accessoires_final)/100.0)
             with st.expander(f"{opt['nom']} – Total: {devis_opt['total']:,} FCFA", expanded=False):
                 st.markdown(f"• Batterie: {opt['type_batterie']}")
-                st.markdown(f"• Onduleur: {opt['type_onduleur']}")
+                
+                # Affichage onduleur avec gestion du couplage
+                onduleur_data = equip_opt['onduleur']
+                if isinstance(onduleur_data, tuple):
+                    onduleur_nom, nb_onduleurs = onduleur_data
+                    if nb_onduleurs > 1:
+                        st.markdown(f"• Onduleur: {nb_onduleurs} x {onduleur_nom} (couplage)")
+                    else:
+                        st.markdown(f"• Onduleur: {onduleur_nom}")
+                else:
+                    st.markdown(f"• Onduleur: {opt['type_onduleur']}")
+                
                 if equip_opt['regulateur']:
                     st.markdown(f"• Régulateur: {equip_opt['regulateur']}")
                 st.markdown(f"• Panneaux: {equip_opt['panneau'][1]} x {equip_opt['panneau'][0]}")
