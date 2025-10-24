@@ -1119,6 +1119,9 @@ else:
 with tab1:
     st.header("Calculez vos besoins en énergie solaire")
     
+    # Charger les prix des équipements
+    prix_equipements = get_current_prices()
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -1627,7 +1630,7 @@ with tab1:
                         onduleur_nom, nb_onduleurs = onduleur_data
                         if nb_onduleurs > 1:
                             st.success(f"✅ **{nb_onduleurs} x {onduleur_nom}** (couplage)")
-                            st.caption(f"🔗 Puissance totale: {nb_onduleurs * PRIX_EQUIPEMENTS['onduleurs'][onduleur_nom]['puissance']}W")
+                            st.caption(f"🔗 Puissance totale: {nb_onduleurs * prix_equipements['onduleurs'][onduleur_nom]['puissance']}W")
                         else:
                             st.success(f"✅ **{onduleur_nom}**")
                     else:
