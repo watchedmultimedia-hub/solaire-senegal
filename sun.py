@@ -886,7 +886,7 @@ with st.sidebar:
             st.image("logo-solaire.svg", width=350)
     except:
         st.markdown("### ☀️ Energie Solaire Sénégal")
-    st.markdown("### ☀️ Pape - Conseiller solaire (chat rapide)")
+    st.markdown("### ☀️ Parlez avec Pape votre Conseiller solaire")
     
     # Callback: déclenché à l'appui sur Entrée
     def _trigger_sidebar_chat():
@@ -996,7 +996,7 @@ with st.sidebar:
 if is_user_authenticated() and is_admin_user():
     tab1, tab2, tab3, tab_contact, tab_admin = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Pape - Conseiller solaire", "📞 Contact", "⚙️ Admin"])
 else:
-    tab1, tab2, tab3, tab_contact = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Pape - Conseiller solaire", "📞 Contact"])
+    tab1, tab2, tab3, tab_contact = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller Technique", "📞 Contact"])
 
 with tab1:
     st.header("Calculez vos besoins en énergie solaire")
