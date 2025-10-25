@@ -112,7 +112,11 @@ def sync_dimensioning_to_stock():
     try:
         # Récupérer les produits existants dans le stock
         existing_products = get_all_products_from_firebase()
-        existing_names = {p.get("nom", "") for p in existing_products}
+        if not existing_products or not isinstance(existing_products, dict):
+            existing_products = {}
+        
+        # Construire l'ensemble des noms existants à partir des valeurs du dict
+        existing_names = {p.get("nom", "") for p in existing_products.values() if isinstance(p, dict)}
         
         # Extraire les produits du dimensionnement
         dimensioning_products = extract_products_from_dimensioning()
@@ -123,8 +127,10 @@ def sync_dimensioning_to_stock():
         for product in dimensioning_products:
             if product["nom"] in existing_names:
                 # Produit existe déjà, on peut mettre à jour les prix si nécessaire
-                existing_product = next((p for p in existing_products if p.get("nom") == product["nom"]), None)
-                if existing_product:
+                existing_item = next(((pid, pdata) for pid, pdata in existing_products.items() 
+                                       if isinstance(pdata, dict) and pdata.get("nom") == product["nom"]), None)
+                if existing_item:
+                    prod_id, existing_product = existing_item
                     # Mettre à jour seulement les prix si ils ont changé
                     if (existing_product.get("prix_vente") != product["prix_vente"] or 
                         existing_product.get("prix_achat") != product["prix_achat"]):
@@ -133,7 +139,7 @@ def sync_dimensioning_to_stock():
                         existing_product["prix_achat"] = product["prix_achat"]
                         existing_product["specifications"] = product["specifications"]
                         
-                        if update_product_in_firebase(existing_product["id"], existing_product):
+                        if update_product_in_firebase(prod_id, existing_product):
                             updated_products += 1
             else:
                 # Nouveau produit, l'ajouter
@@ -159,13 +165,21 @@ def get_stock_for_dimensioning_product(product_name):
     """
     try:
         products = get_all_products_from_firebase()
-        product = next((p for p in products if p.get("nom") == product_name), None)
+        if not products or not isinstance(products, dict):
+            return None
+            
+        # Itérer sur les valeurs du dictionnaire (products est {doc.id: doc.to_dict()})
+        product = next((p for p in products.values() if isinstance(p, dict) and p.get("nom") == product_name), None)
         
         if product:
+            stock_actuel = product.get("stock_actuel")
+            if stock_actuel is None:
+                stock_actuel = product.get("quantite", product.get("stock_initial", 0))
+            stock_min = product.get("stock_minimum", product.get("stock_min", 0))
             return {
-                "stock_actuel": product.get("stock_actuel", 0),
-                "stock_minimum": product.get("stock_minimum", 0),
-                "disponible": product.get("stock_actuel", 0) > 0
+                "stock_actuel": stock_actuel if isinstance(stock_actuel, (int, float)) else 0,
+                "stock_minimum": stock_min if isinstance(stock_min, (int, float)) else 0,
+                "disponible": (stock_actuel or 0) > 0
             }
         return None
         
@@ -183,34 +197,39 @@ def update_stock_after_quote(products_used):
     """
     try:
         existing_products = get_all_products_from_firebase()
+        if not existing_products or not isinstance(existing_products, dict):
+            existing_products = {}
         
         for used_product in products_used:
             product_name = used_product["nom"]
             quantity_used = used_product["quantite"]
             
-            # Trouver le produit dans le stock
-            stock_product = next((p for p in existing_products if p.get("nom") == product_name), None)
+            # Trouver le produit dans le stock (itérer sur les valeurs du dictionnaire)
+            existing_item = next(((pid, pdata) for pid, pdata in existing_products.items() 
+                                  if isinstance(pdata, dict) and pdata.get("nom") == product_name), None)
             
-            if stock_product and stock_product.get("stock_actuel", 0) >= quantity_used:
-                # Décrémenter le stock
-                new_stock = stock_product["stock_actuel"] - quantity_used
-                stock_product["stock_actuel"] = new_stock
-                
-                # Mettre à jour dans Firebase
-                update_product_in_firebase(stock_product["id"], stock_product)
-                
-                # Enregistrer le mouvement de stock
-                from firebase_config import save_stock_movement_to_firebase
-                movement = {
-                    "produit_id": stock_product["id"],
-                    "produit_nom": product_name,
-                    "type": "sortie",
-                    "quantite": quantity_used,
-                    "motif": "Utilisation dans devis",
-                    "date": st.session_state.get("current_date", ""),
-                    "utilisateur": st.session_state.get("user_email", "système")
-                }
-                save_stock_movement_to_firebase(movement)
+            if existing_item:
+                prod_id, stock_product = existing_item
+                if stock_product and stock_product.get("stock_actuel", 0) >= quantity_used:
+                    # Décrémenter le stock
+                    new_stock = stock_product["stock_actuel"] - quantity_used
+                    stock_product["stock_actuel"] = new_stock
+                    
+                    # Mettre à jour dans Firebase
+                    update_product_in_firebase(prod_id, stock_product)
+                    
+                    # Enregistrer le mouvement de stock
+                    from firebase_config import save_stock_movement_to_firebase
+                    movement = {
+                        "produit_id": prod_id,
+                        "produit_nom": product_name,
+                        "type": "sortie",
+                        "quantite": quantity_used,
+                        "motif": "Utilisation dans devis",
+                        "date": st.session_state.get("current_date", ""),
+                        "utilisateur": st.session_state.get("user_email", "système")
+                    }
+                    save_stock_movement_to_firebase(movement)
         
         return True
         
@@ -231,6 +250,9 @@ def check_stock_availability(products_needed):
     """
     try:
         existing_products = get_all_products_from_firebase()
+        if not existing_products or not isinstance(existing_products, dict):
+            existing_products = {}
+            
         missing_products = []
         low_stock_products = []
         
@@ -238,7 +260,8 @@ def check_stock_availability(products_needed):
             product_name = needed_product["nom"]
             quantity_needed = needed_product["quantite"]
             
-            stock_product = next((p for p in existing_products if p.get("nom") == product_name), None)
+            # Itérer sur les valeurs du dictionnaire (existing_products est {doc.id: doc.to_dict()})
+            stock_product = next((p for p in existing_products.values() if isinstance(p, dict) and p.get("nom") == product_name), None)
             
             if not stock_product:
                 missing_products.append({
