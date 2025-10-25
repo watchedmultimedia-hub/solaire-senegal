@@ -23,6 +23,9 @@ from firebase_config import (
     is_admin_email, save_labor_percentages, get_labor_percentages, initialize_labor_percentages_in_firebase,
     clear_labor_percentages_cache, save_accessories_rate, get_accessories_rate, clear_accessories_rate_cache,
     initialize_accessories_rate_in_firebase, get_change_history,
+    # Fonctions de gestion utilisateurs
+    get_all_users_with_roles, clear_users_cache, create_app_user, set_user_role, get_user_role_by_email,
+    disable_app_user, delete_app_user, get_password_reset_link, is_admin_role_email,
     # Fonctions de gestion de stock
     save_product_to_firebase, get_all_products_from_firebase, update_product_in_firebase, delete_product_from_firebase,
     save_client_to_firebase, get_all_clients_from_firebase,
@@ -35,6 +38,7 @@ from firebase_config import (
 from sync_products import get_stock_for_dimensioning_product, check_stock_availability, update_stock_after_quote
 from invoice_editor import show_invoice_editor
 from stock_ui_improvements import create_modern_metric_card, create_stock_alert_card, create_advanced_stock_chart, create_financial_overview, create_interactive_product_table, show_stock_alerts_sidebar
+from matar_ai import matar_ai
 
 # Fonction pour synchroniser les données locales vers Firebase
 def sync_local_to_firebase():
@@ -731,7 +735,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
             with col_stock1:
                 st.markdown("**🌞 Panneaux Solaires**")
                 for nom, specs in prix_equipements["panneaux"].items():
-                    stock_info = get_stock_for_dimensioning_product("panneau", nom)
+                    stock_info = get_stock_for_dimensioning_product(nom)
                     if stock_info:
                         stock_qty = stock_info.get('quantite', 0)
                         if stock_qty > 0:
@@ -746,7 +750,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
             with col_stock2:
                 st.markdown("**🔋 Batteries**")
                 for nom, specs in prix_equipements["batteries"].items():
-                    stock_info = get_stock_for_dimensioning_product("batterie", nom)
+                    stock_info = get_stock_for_dimensioning_product(nom)
                     if stock_info:
                         stock_qty = stock_info.get('quantite', 0)
                         if stock_qty > 0:
@@ -761,7 +765,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
             with col_stock3:
                 st.markdown("**⚡ Onduleurs**")
                 for nom, specs in prix_equipements["onduleurs"].items():
-                    stock_info = get_stock_for_dimensioning_product("onduleur", nom)
+                    stock_info = get_stock_for_dimensioning_product(nom)
                     if stock_info:
                         stock_qty = stock_info.get('quantite', 0)
                         if stock_qty > 0:
@@ -858,15 +862,23 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     onduleur_select = None
     nb_onduleurs = 1
     
-    # Filtrage des onduleurs selon le voltage système
+    # Conversion du voltage système en numérique pour comparaison
+    voltage_systeme_numeric = 12 if voltage_systeme == "12V" else 24 if voltage_systeme == "24V" else 48 if voltage_systeme == "48V" else 180
+    
+    # Filtrage des onduleurs selon le voltage système avec logique améliorée
     if voltage_systeme == "High Voltage":
         # Pour High Voltage, prendre les onduleurs avec voltage >= 180V
         onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
                             if type_onduleur == v["type"] and v["voltage"] >= 180 and v.get("phase", "monophase") == phase_type}
     else:
-        # Pour les voltages standards, filtrage exact
+        # Pour les voltages standards, filtrage avec tolérance
         onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
-                            if type_onduleur == v["type"] and v["voltage"] == voltage_systeme and v.get("phase", "monophase") == phase_type}
+                            if type_onduleur == v["type"] and v["voltage"] == voltage_systeme_numeric and v.get("phase", "monophase") == phase_type}
+        
+        # Si aucun onduleur trouvé avec voltage exact, essayer avec compatibilité élargie
+        if not onduleurs_filtres:
+            onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
+                                if type_onduleur == v["type"] and v.get("phase", "monophase") == phase_type}
     
     if onduleurs_filtres:
         # Essayer d'abord un seul onduleur du type choisi
@@ -920,6 +932,27 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
                 # Limiter à 4 onduleurs maximum pour des raisons pratiques
                 if nb_onduleurs <= 4:
                     onduleur_select = nom_max
+    
+    # Fallback: si toujours aucun onduleur sélectionné, prendre le meilleur disponible
+    if not onduleur_select and prix_equipements.get("onduleurs"):
+        # Chercher tous les onduleurs compatibles sans restriction de type
+        tous_onduleurs = {k: v for k, v in prix_equipements["onduleurs"].items() 
+                         if v.get("phase", "monophase") == phase_type and v["puissance"] > 0}
+        
+        if tous_onduleurs:
+            # Prendre l'onduleur le plus proche de la puissance requise
+            puissance_requise = dimensionnement["puissance_onduleur"]
+            meilleur_onduleur = min(tous_onduleurs.items(), 
+                                  key=lambda x: abs(x[1]["puissance"] - puissance_requise) if x[1]["puissance"] >= puissance_requise 
+                                  else float('inf'))
+            
+            if meilleur_onduleur[1]["puissance"] >= puissance_requise:
+                onduleur_select = meilleur_onduleur[0]
+                nb_onduleurs = 1
+            else:
+                # Calculer le nombre nécessaire avec le meilleur disponible
+                onduleur_select = meilleur_onduleur[0]
+                nb_onduleurs = min(4, int(puissance_requise / meilleur_onduleur[1]["puissance"]) + 1)
     
     # Sélection régulateur (seulement si onduleur pas hybride)
     regulateur_select = None
@@ -1265,7 +1298,7 @@ with st.sidebar:
     st.markdown("---")
     
     if not is_user_authenticated():
-        with st.expander("🔐 Connexion Admin", expanded=False):
+        with st.expander("🔐 Connexion", expanded=False):
             # Connexion
             st.subheader("🔐 Connexion")
             with st.form("admin_login"):
@@ -1279,7 +1312,10 @@ with st.sidebar:
                         if user:
                             st.session_state['user_token'] = user['idToken']
                             st.session_state['user_email'] = email
-                            st.session_state['is_admin'] = is_admin_email(email)
+                            st.session_state['is_admin'] = is_admin_role_email(email) or is_admin_email(email)
+                            # Détecter et enregistrer le rôle
+                            role = get_user_role_by_email(email)
+                            st.session_state['user_role'] = role if role else ('admin' if st.session_state['is_admin'] else 'technicien')
                             st.success("✅ Connexion réussie!")
                             st.rerun()
                         else:
@@ -1292,17 +1328,30 @@ with st.sidebar:
         else:
             st.info(f"👋 **Utilisateur connecté**")
         st.write(f"📧 {st.session_state.get('user_email', '')}")
+        # Afficher le rôle utilisateur si disponible
+        user_role = st.session_state.get('user_role')
+        if user_role:
+            st.write(f"🎖️ Rôle : {'Administrateur' if user_role=='admin' else ('Technicien' if user_role=='technicien' else 'Client')}")
         if st.button("🚪 Se déconnecter", use_container_width=True):
             logout_user()
             st.rerun()
 
 # (Supprimé) Mode développement et Debug Info retirés selon demande
 
-# Onglets principaux avec admin si connecté
-if is_user_authenticated() and is_admin_user():
-    tab1, tab2, tab3, tab_contact, tab_admin = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller solaire", "📞 Contact", "⚙️ Admin"])
+# Onglets principaux selon nouvelle logique d'accès
+user_role = st.session_state.get('user_role')
+is_authenticated = is_user_authenticated()
+
+if is_authenticated and ((user_role == 'admin') or is_admin_user()):
+    # Admin : accès à tout
+    tab1, tab_fin, tab2, tab3, tab_contact, tab_admin = st.tabs(["📊 Dimensionnement", "📈 Estimation Financière & Rentabilité", "💰 Devis", "☀️ Conseiller solaire", "📞 Contact", "⚙️ Admin"])
+elif is_authenticated and user_role == 'technicien':
+    # Technicien : Dimensionnement, Conseiller technique, Contact + Devis
+    tab1, tab_fin, tab2, tab3, tab_contact = st.tabs(["📊 Dimensionnement", "📈 Estimation Financière & Rentabilité", "💰 Devis", "☀️ Conseiller Technique", "📞 Contact"])
 else:
-    tab1, tab2, tab3, tab_contact = st.tabs(["📊 Dimensionnement", "💰 Devis", "☀️ Conseiller Technique", "📞 Contact"])
+    # Non connecté ou Client : Dimensionnement, Conseiller technique, Contact seulement
+    tab1, tab_fin, tab3, tab_contact = st.tabs(["📊 Dimensionnement", "📈 Etude Rentabilité Financière", "☀️ Conseiller Technique", "📞 Contact"])
+    tab2 = None  # Pas d'onglet Devis pour les non-connectés et clients
 
 with tab1:
     st.header("Calculez vos besoins en énergie solaire")
@@ -2409,29 +2458,14 @@ with tab1:
         else:
             st.error("❌ Veuillez entrer une consommation supérieure à 0")
 
-with tab2:
-    st.header("💰 Devis Estimatif Détaillé")
-    
+with tab_fin:
+    st.header("📈 Estimation Financière & Rentabilité")
+
     if 'equipements' not in st.session_state:
         st.warning("⚠️ Veuillez d'abord effectuer un dimensionnement dans l'onglet 'Dimensionnement'")
     else:
-        st.markdown("### ⚙️ Options du devis")
-        
-        # Sélection de la région pour le calcul de la main d'œuvre
-        region_selectionnee = st.selectbox(
-            "🌍 Région d'installation",
-            options=REGIONS_SENEGAL,
-            index=0,
-            help="Sélectionnez la région où sera installé le système solaire. Le pourcentage de main d'œuvre sera appliqué automatiquement."
-        )
-        
-        # Nom du demandeur
-        nom_demandeur = st.text_input(
-            "👤 Nom du demandeur",
-            placeholder="Entrez le nom du demandeur du devis",
-            help="Le nom du demandeur apparaîtra sur le devis généré"
-        )
-        
+        st.markdown("### ⚙️ Paramètres financiers")
+        region_finance = st.selectbox("🌍 Région d'installation", options=REGIONS_SENEGAL)
         # Récupération du taux accessoires depuis les paramètres admin (extrait valeur numérique)
         taux_accessoires_admin_data = get_accessories_rate()
         if isinstance(taux_accessoires_admin_data, dict):
@@ -2441,134 +2475,17 @@ with tab2:
         if taux_accessoires_admin is None:
             initialize_accessories_rate_in_firebase({'rate': TAUX_ACCESSOIRES_DEFAUT})
             taux_accessoires_admin = TAUX_ACCESSOIRES_DEFAUT
-        
-        devis = calculer_devis(st.session_state.equipements, use_online=False, accessoires_rate=float(taux_accessoires_admin)/100.0, region_selectionnee=region_selectionnee)
-        
-        # Résumé du système
-        st.markdown("### 📋 Résumé de votre installation")
-        col_info1, col_info2, col_info3, col_info4 = st.columns(4)
-        
-        with col_info1:
-            st.metric("Consommation", f"{st.session_state.consommation:.1f} kWh/jour")
-        with col_info2:
-            st.metric("Puissance totale", f"{devis['puissance_totale']:.2f} kWc")
-        with col_info3:
-            voltage_display = st.session_state.choix['voltage']
-            voltage_text = voltage_display if voltage_display == "High Voltage" else f"{voltage_display}V"
-            st.metric("Type système", f"{voltage_text} {st.session_state.choix['type_batterie']}")
-        with col_info4:
-            surface_m2_resume = devis['puissance_totale'] * SURFACE_PAR_KWC_M2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT/100.0)
-            st.metric("Surface panneaux approx.", f"{surface_m2_resume:.1f} m²")
-        
-        st.caption(f"🎯 Autonomie souhaitée: {(st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)}% • Estimée: {(st.session_state.autonomie_reelle_pct if 'autonomie_reelle_pct' in st.session_state else (st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)):.0f}%")
-        
-        st.markdown("---")
-        st.markdown("### 📦 Détails du devis")
-        
-        # Style CSS pour le tableau Excel
-        table_style = """
-        <style>
-        .excel-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 10px 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        .excel-table th {
-            background: linear-gradient(135deg, #4CAF50, #45a049);
-            color: white;
-            font-weight: bold;
-            padding: 15px 10px;
-            text-align: left;
-            border: 1px solid #ddd;
-            font-size: 16px;
-        }
-        .excel-table td {
-            padding: 12px 10px;
-            border: 1px solid #ddd;
-            font-size: 15px;
-        }
-        .excel-table tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        .excel-table tr:nth-child(odd) {
-            background-color: #ffffff;
-        }
-        .excel-table tr:hover {
-            background-color: #f5f5f5;
-        }
-        .excel-table .price-cell {
-            text-align: right;
-            font-weight: 500;
-        }
-        .excel-table .total-cell {
-            font-weight: bold;
-            color: #2E7D32;
-        }
-        .excel-table .qty-cell {
-            text-align: center;
-            font-weight: 500;
-        }
-        .total-row {
-            background: linear-gradient(135deg, #E8F5E8, #C8E6C9) !important;
-            font-weight: bold;
-            font-size: 18px;
-        }
-        .total-row td {
-            border-top: 2px solid #4CAF50;
-            padding: 18px 10px;
-        }
-        </style>
-        """
-        
-        # Construire le tableau HTML
-        table_html = table_style + """
-        <div style="overflow-x:auto;">
-<table class="excel-table">
-            <thead>
-                <tr>
-                    <th style="width: 40%;">📦 Équipement</th>
-                    <th style="width: 10%;">📊 Qté</th>
-                    <th style="width: 25%;">💰 Prix unitaire (FCFA)</th>
-                    <th style="width: 25%;">💵 Sous-total (FCFA)</th>
-                </tr>
-            </thead>
-            <tbody>
-        """
-        
-        # Ajouter les lignes du devis
-        for item in devis["details"]:
-            table_html += f"""
-                <tr>
-                    <td>{item['item']}</td>
-                    <td class="qty-cell">x{item['quantite']}</td>
-                    <td class="price-cell">{item['prix_unitaire']:,}</td>
-                    <td class="price-cell total-cell">{item['sous_total']:,}</td>
-                </tr>
-            """
-        
-        # Ajouter la ligne de total
-        table_html += f"""
-                <tr class="total-row">
-                    <td colspan="3"><strong>💰 TOTAL ESTIMATIF</strong></td>
-                    <td class="price-cell"><strong>{devis['total']:,}</strong></td>
-                </tr>
-            </tbody>
-        </table>
-</div>
-        """
-        
-        # Afficher le tableau avec st.components.v1.html pour un rendu garanti
-        import streamlit.components.v1 as components
-        components.html(table_html, height=400)
-        
-        # Estimation facture électricité (Senelec)
-        st.markdown("---")
-        st.markdown("### ⚡ Estimation facture électricité (Senelec)")
+        devis = calculer_devis(
+            st.session_state.equipements,
+            use_online=False,
+            accessoires_rate=float(taux_accessoires_admin)/100.0,
+            region_selectionnee=region_finance
+        )
+
+        # Estimation Senelec avant/après solaire
         kwh_mensuel_total = (st.session_state.consommation if 'consommation' in st.session_state else 10.0) * 30
 
-        # Production solaire estimée à partir des équipements actifs (option choisie ou dimensionnement)
+        # Production solaire estimée à partir des équipements actifs
         equip_actifs = st.session_state.get('equip_choisi', st.session_state.get('equipements', None))
         prod_kwh_j = 0.0
         autonomie_reelle_pct = 0.0
@@ -2581,7 +2498,6 @@ with tab2:
                     puissance_totale_w = puissance_unitaire * nb
                 else:
                     puissance_totale_w = 0
-                # 5h d'ensoleillement/jour avec pertes ~25%
                 prod_kwh_j = (puissance_totale_w / 1000.0) * 5.0 * 0.75
                 conso_totale = st.session_state.consommation if 'consommation' in st.session_state else 10.0
                 autonomie_reelle_pct = min(100.0, (prod_kwh_j / conso_totale) * 100.0)
@@ -2589,17 +2505,14 @@ with tab2:
         kwh_mensuel_solaire = prod_kwh_j * 30.0
         kwh_mensuel_apres = max(kwh_mensuel_total - kwh_mensuel_solaire, 0.0)
 
-        # Sauvegarde pour autres sections
         st.session_state.production_solaire_kwh_j = prod_kwh_j
         st.session_state.autonomie_reelle_pct = autonomie_reelle_pct
 
-        # Calcul coût Senelec après solaire
         palier1 = min(150.0, kwh_mensuel_apres)
         palier2 = min(max(kwh_mensuel_apres - 150.0, 0.0), 100.0)
         palier3 = max(kwh_mensuel_apres - 250.0, 0.0)
         cout_mensuel_senelec = palier1 * 124.17 + palier2 * 136.49 + palier3 * 159.36
 
-        # Affichage en montants (FCFA/mois)
         palier1_av = min(150.0, kwh_mensuel_total)
         palier2_av = min(max(kwh_mensuel_total - 150.0, 0.0), 100.0)
         palier3_av = max(kwh_mensuel_total - 250.0, 0.0)
@@ -2614,46 +2527,457 @@ with tab2:
         with col_sen3:
             st.metric("Économie estimée", f"{economie_mensuelle:,.0f} FCFA/mois")
         st.caption(f"Couverture réelle estimée: {autonomie_reelle_pct:.0f}%")
-        
-        # (Section paiement supprimée; notes importantes déplacées en bas)
-        
-        # Économies sur 10 ans
-        st.markdown("---")
-        st.markdown("### 💡 Analyse financière")
-        
-        # Calcul des économies basées sur la couverture réelle
-        cout_electricite_kwh = 100  # FCFA par kWh (Senelec)
-        conso_couverte_reelle = st.session_state.production_solaire_kwh_j if 'production_solaire_kwh_j' in st.session_state else (st.session_state.consommation_couverte if 'consommation_couverte' in st.session_state else st.session_state.consommation)
-        conso_totale = st.session_state.consommation if 'consommation' in st.session_state else conso_couverte_reelle
-        conso_couverte_reelle = min(conso_couverte_reelle, conso_totale)
-        economie_annuelle = conso_couverte_reelle * 365 * cout_electricite_kwh
+
+        # Calculs financiers (toujours exécutés, affichage optionnel)
+        try:
+            # Tarifs par palier (défaut si secrets indisponibles)
+            try:
+                t1 = float(st.secrets["formulas"]["facture"]["tarifs"]["tier1_price"])
+            except Exception:
+                t1 = 124.17
+            try:
+                t2 = float(st.secrets["formulas"]["facture"]["tarifs"]["tier2_price"])
+            except Exception:
+                t2 = 136.49
+            try:
+                t3 = float(st.secrets["formulas"]["facture"]["tarifs"]["tier3_price"])
+            except Exception:
+                t3 = 159.36
+
+            # Déduction de la puissance kWc depuis les équipements actifs
+            kWc_fin = 0.0
+            if equip_actifs and equip_actifs.get('panneau'):
+                panneau_nom, nb = equip_actifs['panneau']
+                if panneau_nom and nb > 0:
+                    current_prices = get_current_prices()
+                    if current_prices and 'panneaux' in current_prices and panneau_nom in current_prices['panneaux']:
+                        puissance_unitaire = current_prices['panneaux'][panneau_nom]['puissance']
+                        kWc_fin = (puissance_unitaire * nb) / 1000.0
+
+            # Données mensuelles (fallback si PVGIS non dispo)
+            heures_par_jour = {'Jan':6.2,'Fév':6.5,'Mar':6.7,'Avr':6.6,'Mai':6.5,'Juin':6.0,'Juil':5.5,'Août':5.4,'Sep':5.8,'Oct':6.0,'Nov':6.2,'Déc':6.1}
+            jours_mois = {'Jan':31,'Fév':28,'Mar':31,'Avr':30,'Mai':31,'Juin':30,'Juil':31,'Août':31,'Sep':30,'Oct':31,'Nov':30,'Déc':31}
+            PR = 0.80
+            facteurs_saisonniers = {'Jan':0.95,'Fév':0.95,'Mar':0.90,'Avr':0.85,'Mai':0.80,'Juin':0.75,'Juil':0.70,'Août':0.70,'Sep':0.75,'Oct':0.85,'Nov':0.90,'Déc':0.95}
+
+            economies_par_mois = []
+            cout_avant_par_mois = []
+            cout_apres_par_mois = []
+            for m in heures_par_jour:
+                # Production ajustée mois par mois
+                prod_ajustee_m = kWc_fin * heures_par_jour[m] * PR * jours_mois[m] * facteurs_saisonniers[m]
+                conso_mensuelle_m = (st.session_state.consommation if 'consommation' in st.session_state else 10.0) * jours_mois[m]
+
+                # Coût avant solaire
+                p1_av = min(150.0, conso_mensuelle_m)
+                p2_av = min(max(conso_mensuelle_m - 150.0, 0.0), 100.0)
+                p3_av = max(conso_mensuelle_m - 250.0, 0.0)
+                cout_m_av = p1_av * t1 + p2_av * t2 + p3_av * t3
+
+                # Coût après solaire
+                kwh_apres_m = max(conso_mensuelle_m - prod_ajustee_m, 0.0)
+                p1_ap = min(150.0, kwh_apres_m)
+                p2_ap = min(max(kwh_apres_m - 150.0, 0.0), 100.0)
+                p3_ap = max(kwh_apres_m - 250.0, 0.0)
+                cout_m_ap = p1_ap * t1 + p2_ap * t2 + p3_ap * t3
+
+                eco_m = max(cout_m_av - cout_m_ap, 0.0)
+                economies_par_mois.append(eco_m)
+                cout_avant_par_mois.append(cout_m_av)
+                cout_apres_par_mois.append(cout_m_ap)
+
+            economie_annuelle = sum(economies_par_mois)
+        except Exception:
+            economie_annuelle = economie_mensuelle * 12
+
         economie_10ans = economie_annuelle * 10
         retour_investissement = devis['total'] / economie_annuelle if economie_annuelle > 0 else float('inf')
-        
-        col_eco1, col_eco2, col_eco3 = st.columns(3)
-        
-        with col_eco1:
-            st.metric("💰 Économie annuelle", f"{economie_annuelle:,.0f} FCFA")
-        with col_eco2:
-            st.metric("📈 Économie sur 10 ans", f"{economie_10ans:,.0f} FCFA")
-        with col_eco3:
-            st.metric("⏱️ Retour sur investissement", f"{retour_investissement:.1f} ans")
-        
-        if retour_investissement < 5:
-            st.success(f"✅ Excellent investissement ! Rentabilisé en {retour_investissement:.1f} ans")
-        elif retour_investissement < 8:
-            st.info(f"👍 Bon investissement ! Rentabilisé en {retour_investissement:.1f} ans")
+        # Partage des métriques financières dans l'état de session pour usage inter-onglets
+        st.session_state.economie_annuelle = economie_annuelle
+        st.session_state.economie_10ans = economie_10ans
+        st.session_state.retour_investissement = retour_investissement
+
+        # Affichage optionnel de la section Analyse financière
+        if 'show_finance_section' not in st.session_state:
+            st.session_state.show_finance_section = False
+
+        if not st.session_state.show_finance_section:
+            if st.button("Afficher l'analyse financière détaillée", key="finance_show_btn"):
+                st.session_state.show_finance_section = True
+                st.rerun()
         else:
-            st.warning(f"⚠️ Investissement long terme : {retour_investissement:.1f} ans")
-        
-        # Boutons de téléchargement
+            st.markdown("---")
+            st.markdown("### 💡 Analyse financière")
+
+            # Tableau des économies mensuelles (aperçu)
+            try:
+                df_eco = pd.DataFrame({
+                    "Mois": list(heures_par_jour.keys()),
+                    "Coût avant (FCFA)": [round(x,0) for x in cout_avant_par_mois],
+                    "Coût après (FCFA)": [round(x,0) for x in cout_apres_par_mois],
+                    "Économie (FCFA)": [round(x,0) for x in economies_par_mois],
+                })
+                # Toggle d'affichage du tableau détaillé (12 mois)
+                if 'show_eco_table' not in st.session_state:
+                    st.session_state.show_eco_table = False
+                if not st.session_state.show_eco_table:
+                    if st.button("Afficher le tableau détaillé (12 mois)", key="show_eco_btn"):
+                        st.session_state.show_eco_table = True
+                        st.rerun()
+                    st.caption("Aperçu réduit. Cliquez pour voir le tableau complet.")
+                else:
+                    if st.button("Masquer le tableau", key="hide_eco_btn"):
+                        st.session_state.show_eco_table = False
+                        st.rerun()
+                    st.dataframe(df_eco, use_container_width=True, hide_index=True)
+            except Exception:
+                pass
+
+            col_eco1, col_eco2, col_eco3 = st.columns(3)
+            with col_eco1:
+                st.metric("💰 Économie annuelle", f"{economie_annuelle:,.0f} FCFA")
+            with col_eco2:
+                st.metric("📈 Économie sur 10 ans", f"{economie_10ans:,.0f} FCFA")
+            with col_eco3:
+                st.metric("⏱️ Retour sur investissement", f"{retour_investissement:.1f} ans")
+
+            # Bouton pour masquer toute la section
+            if st.button("Masquer l'analyse financière", key="finance_hide_btn"):
+                st.session_state.show_finance_section = False
+                st.rerun()
+
+            if retour_investissement < 5:
+                st.success(f"✅ Excellent investissement ! Rentabilisé en {retour_investissement:.1f} ans")
+            elif retour_investissement < 8:
+                st.info(f"👍 Bon investissement ! Rentabilisé en {retour_investissement:.1f} ans")
+            else:
+                st.warning(f"⚠️ Investissement long terme : {retour_investissement:.1f} ans")
+
         st.markdown("---")
-        col_dl1, col_dl2 = st.columns(2)
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #E3F2FD, #BBDEFB); padding: 20px; border-radius: 15px; margin: 20px 0; border-left: 5px solid #2196F3;">
+            <h3 style="color: #1976D2; margin: 0 0 15px 0; display: flex; align-items: center;">
+                💰 Estimation Financière & Rentabilité
+            </h3>
+            <p style="color: #424242; margin: 0; font-size: 14px;">
+                Analyse complète de l'investissement et des retours financiers
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_fin1, col_fin2 = st.columns(2)
+        with col_fin1:
+            st.markdown("#### 💵 Coût Total de l'Installation")
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #FFF3E0, #FFE0B2); padding: 20px; border-radius: 10px; border-left: 4px solid #FF9800; text-align: center;">
+                <div style="font-size: 32px; font-weight: bold; color: #F57C00; margin-bottom: 10px;">
+                    {devis['total']:,} FCFA
+                </div>
+                <div style="color: #EF6C00; font-size: 16px; margin-bottom: 15px;">
+                    Estimation complète clé en main
+                </div>
+                <div style="background: rgba(255,255,255,0.7); padding: 10px; border-radius: 5px; font-size: 14px; color: #E65100;">
+                    <strong>Inclus :</strong> Équipements + Installation + Configuration
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.info("💡 **Pour un devis détaillé personnalisé**, contactez notre service technique qui analysera vos besoins spécifiques et vous proposera les meilleures options.")
+        with col_fin2:
+            st.markdown("#### 📊 Simulations de Rentabilité")
+            duree_vie_systeme = 20
+            taux_inflation = 0.03
+            taux_augmentation_electricite = 0.05
+            flux_annuels = []
+            for annee in range(1, duree_vie_systeme + 1):
+                economie_annee = economie_annuelle * ((1 + taux_augmentation_electricite) ** annee)
+                flux_annuels.append(economie_annee)
+            van_simple = sum(flux_annuels) - devis['total']
+            taux_rendement_interne = (sum(flux_annuels) / devis['total'] - 1) / duree_vie_systeme * 100
+            cumul_actualise = 0
+            periode_retour_actualisee = duree_vie_systeme
+            for annee in range(1, duree_vie_systeme + 1):
+                flux_actualise = flux_annuels[annee-1] / ((1 + taux_inflation) ** annee)
+                cumul_actualise += flux_actualise
+                if cumul_actualise >= devis['total'] and periode_retour_actualisee == duree_vie_systeme:
+                    periode_retour_actualisee = annee
+            st.metric("🎯 Retour sur Investissement", f"{retour_investissement:.1f} ans")
+            st.metric("📈 Taux de Rendement Interne", f"{taux_rendement_interne:.1f}% / an")
+            st.metric("💎 Valeur Actuelle Nette (20 ans)", f"{van_simple:,.0f} FCFA")
+            if taux_rendement_interne > 15:
+                st.success("🏆 **Investissement excellent** - Très haute rentabilité")
+            elif taux_rendement_interne > 10:
+                st.success("✅ **Investissement très bon** - Rentabilité attractive")
+            elif taux_rendement_interne > 7:
+                st.info("👍 **Investissement correct** - Rentabilité satisfaisante")
+            else:
+                st.warning("⚠️ **Investissement à long terme** - Rentabilité modérée")
+st.info("ℹ️ ")
+
+if tab2 is not None:
+    with tab2:
+        st.header("💰 Devis Estimatif Détaillé")
         
-        with col_dl1:
+        if 'equipements' not in st.session_state:
+            st.warning("⚠️ Veuillez d'abord effectuer un dimensionnement dans l'onglet 'Dimensionnement'")
+        else:
+            st.markdown("### ⚙️ Options du devis")
             
-            # Génération du devis texte
-            devis_text = f"""
+            # Sélection de la région pour le calcul de la main d'œuvre
+            region_selectionnee = st.selectbox(
+                "🌍 Région d'installation",
+                options=REGIONS_SENEGAL,
+                index=0,
+                help="Sélectionnez la région où sera installé le système solaire. Le pourcentage de main d'œuvre sera appliqué automatiquement."
+            )
+            
+            # Nom du demandeur
+            nom_demandeur = st.text_input(
+                "👤 Nom du demandeur",
+                placeholder="Entrez le nom du demandeur du devis",
+                help="Le nom du demandeur apparaîtra sur le devis généré"
+            )
+            
+            # Récupération du taux accessoires depuis les paramètres admin (extrait valeur numérique)
+            taux_accessoires_admin_data = get_accessories_rate()
+            if isinstance(taux_accessoires_admin_data, dict):
+                taux_accessoires_admin = taux_accessoires_admin_data.get('rate')
+            else:
+                taux_accessoires_admin = taux_accessoires_admin_data
+            if taux_accessoires_admin is None:
+                initialize_accessories_rate_in_firebase({'rate': TAUX_ACCESSOIRES_DEFAUT})
+                taux_accessoires_admin = TAUX_ACCESSOIRES_DEFAUT
+            
+            devis = calculer_devis(st.session_state.equipements, use_online=False, accessoires_rate=float(taux_accessoires_admin)/100.0, region_selectionnee=region_selectionnee)
+            
+            # Résumé du système
+            st.markdown("### 📋 Résumé de votre installation")
+            col_info1, col_info2, col_info3, col_info4 = st.columns(4)
+            
+            with col_info1:
+                st.metric("Consommation", f"{st.session_state.consommation:.1f} kWh/jour")
+            with col_info2:
+                st.metric("Puissance totale", f"{devis['puissance_totale']:.2f} kWc")
+            with col_info3:
+                voltage_display = st.session_state.choix['voltage']
+                voltage_text = voltage_display if voltage_display == "High Voltage" else f"{voltage_display}V"
+                st.metric("Type système", f"{voltage_text} {st.session_state.choix['type_batterie']}")
+            with col_info4:
+                surface_m2_resume = devis['puissance_totale'] * SURFACE_PAR_KWC_M2 * (1 + MARGE_IMPLANTATION_SURFACE_PCT/100.0)
+                st.metric("Surface panneaux approx.", f"{surface_m2_resume:.1f} m²")
+            
+            st.caption(f"🎯 Autonomie souhaitée: {(st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)}% • Estimée: {(st.session_state.autonomie_reelle_pct if 'autonomie_reelle_pct' in st.session_state else (st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)):.0f}%")
+            
+            st.markdown("---")
+            st.markdown("### 📦 Détails du devis")
+            
+            # Style CSS pour le tableau Excel
+            table_style = """
+            <style>
+            .excel-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                margin: 10px 0;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            }
+            .excel-table th {
+                background: linear-gradient(135deg, #4CAF50, #45a049);
+                color: white;
+                font-weight: bold;
+                padding: 15px 10px;
+                text-align: left;
+                border: 1px solid #ddd;
+                font-size: 16px;
+            }
+            .excel-table td {
+                padding: 12px 10px;
+                border: 1px solid #ddd;
+                font-size: 15px;
+            }
+            .excel-table tr:nth-child(even) {
+                background-color: #f9f9f9;
+            }
+            .excel-table tr:nth-child(odd) {
+                background-color: #ffffff;
+            }
+            .excel-table tr:hover {
+                background-color: #f5f5f5;
+            }
+            .excel-table .price-cell {
+                text-align: right;
+                font-weight: 500;
+            }
+            .excel-table .total-cell {
+                font-weight: bold;
+                color: #2E7D32;
+            }
+            .excel-table .qty-cell {
+                text-align: center;
+                font-weight: 500;
+            }
+            .total-row {
+                background: linear-gradient(135deg, #E8F5E8, #C8E6C9) !important;
+                font-weight: bold;
+                font-size: 18px;
+            }
+            .total-row td {
+                border-top: 2px solid #4CAF50;
+                padding: 18px 10px;
+            }
+            </style>
+            """
+            
+            # Construire le tableau HTML
+            table_html = table_style + """
+            <div style="overflow-x:auto;">
+    <table class="excel-table">
+                <thead>
+                    <tr>
+                        <th style="width: 40%;">📦 Équipement</th>
+                        <th style="width: 10%;">📊 Qté</th>
+                        <th style="width: 25%;">💰 Prix unitaire (FCFA)</th>
+                        <th style="width: 25%;">💵 Sous-total (FCFA)</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            
+            # Ajouter les lignes du devis
+            for item in devis["details"]:
+                table_html += f"""
+                    <tr>
+                        <td>{item['item']}</td>
+                        <td class="qty-cell">x{item['quantite']}</td>
+                        <td class="price-cell">{item['prix_unitaire']:,}</td>
+                        <td class="price-cell total-cell">{item['sous_total']:,}</td>
+                    </tr>
+                """
+            
+            # Ajouter la ligne de total
+            table_html += f"""
+                    <tr class="total-row">
+                        <td colspan="3"><strong>💰 TOTAL ESTIMATIF</strong></td>
+                        <td class="price-cell"><strong>{devis['total']:,}</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+    </div>
+            """
+            
+            # Afficher le tableau avec st.components.v1.html pour un rendu garanti
+            import streamlit.components.v1 as components
+            components.html(table_html, height=400)
+            
+            # Estimation facture électricité (Senelec)
+            st.markdown("---")
+            st.markdown("### ⚡ Estimation facture électricité (Senelec)")
+            kwh_mensuel_total = (st.session_state.consommation if 'consommation' in st.session_state else 10.0) * 30
+
+            # Production solaire estimée à partir des équipements actifs (option choisie ou dimensionnement)
+            equip_actifs = st.session_state.get('equip_choisi', st.session_state.get('equipements', None))
+            prod_kwh_j = 0.0
+            autonomie_reelle_pct = 0.0
+            if equip_actifs and equip_actifs.get('panneau'):
+                panneau_nom, nb = equip_actifs['panneau']
+                if panneau_nom and nb > 0:
+                    current_prices = get_current_prices()
+                    if current_prices and 'panneaux' in current_prices and panneau_nom in current_prices['panneaux']:
+                        puissance_unitaire = current_prices['panneaux'][panneau_nom]['puissance']
+                        puissance_totale_w = puissance_unitaire * nb
+                    else:
+                        puissance_totale_w = 0
+                    # 5h d'ensoleillement/jour avec pertes ~25%
+                    prod_kwh_j = (puissance_totale_w / 1000.0) * 5.0 * 0.75
+                    conso_totale = st.session_state.consommation if 'consommation' in st.session_state else 10.0
+                    autonomie_reelle_pct = min(100.0, (prod_kwh_j / conso_totale) * 100.0)
+
+            kwh_mensuel_solaire = prod_kwh_j * 30.0
+            kwh_mensuel_apres = max(kwh_mensuel_total - kwh_mensuel_solaire, 0.0)
+
+            # Sauvegarde pour autres sections
+            st.session_state.production_solaire_kwh_j = prod_kwh_j
+            st.session_state.autonomie_reelle_pct = autonomie_reelle_pct
+
+            # Calcul coût Senelec après solaire
+            palier1 = min(150.0, kwh_mensuel_apres)
+            palier2 = min(max(kwh_mensuel_apres - 150.0, 0.0), 100.0)
+            palier3 = max(kwh_mensuel_apres - 250.0, 0.0)
+            cout_mensuel_senelec = palier1 * 124.17 + palier2 * 136.49 + palier3 * 159.36
+
+            # Affichage en montants (FCFA/mois)
+            palier1_av = min(150.0, kwh_mensuel_total)
+            palier2_av = min(max(kwh_mensuel_total - 150.0, 0.0), 100.0)
+            palier3_av = max(kwh_mensuel_total - 250.0, 0.0)
+            cout_mensuel_avant = palier1_av * 124.17 + palier2_av * 136.49 + palier3_av * 159.36
+            economie_mensuelle = max(cout_mensuel_avant - cout_mensuel_senelec, 0.0)
+
+            col_sen1, col_sen2, col_sen3 = st.columns(3)
+            with col_sen1:
+                st.metric("Avant solaire", f"{cout_mensuel_avant:,.0f} FCFA/mois")
+            with col_sen2:
+                st.metric("Après solaire estimé", f"{cout_mensuel_senelec:,.0f} FCFA/mois")
+            with col_sen3:
+                st.metric("Économie estimée", f"{economie_mensuelle:,.0f} FCFA/mois")
+            st.caption(f"Couverture réelle estimée: {autonomie_reelle_pct:.0f}%")
+            
+            # (Section paiement supprimée; notes importantes déplacées en bas)
+            
+            # Économies sur 10 ans
+            st.markdown("---")
+            st.info("ℹ️ L’analyse financière a été déplacée dans l’onglet ‘Estimation Financière & Rentabilité’.")
+            
+            st.info("ℹ️ Contenu déplacé dans l’onglet ‘Estimation Financière & Rentabilité’.")
+            
+            # Boutons de téléchargement
+            st.markdown("---")
+            col_dl1, col_dl2 = st.columns(2)
+            
+            with col_dl1:
+                
+                # Génération du devis texte
+                # Calcul minimal des métriques financières pour l'export (fallback si onglet finance non visité)
+                try:
+                    # Fallback avec calcul mensuel par paliers Senelec
+                    # Tarifs par palier (défaut si secrets indisponibles)
+                    try:
+                        t1 = float(st.secrets["formulas"]["facture"]["tarifs"]["tier1_price"])
+                    except Exception:
+                        t1 = 124.17
+                    try:
+                        t2 = float(st.secrets["formulas"]["facture"]["tarifs"]["tier2_price"])
+                    except Exception:
+                        t2 = 136.49
+                    try:
+                        t3 = float(st.secrets["formulas"]["facture"]["tarifs"]["tier3_price"])
+                    except Exception:
+                        t3 = 159.36
+                    # Consommation et production
+                    conso_jour = st.session_state.consommation if 'consommation' in st.session_state else 10.0
+                    kwh_mensuel_total_dev = conso_jour * 30.0
+                    prod_kwh_j_dev = st.session_state.get('production_solaire_kwh_j', 0.0)
+                    kwh_mensuel_solaire_dev = prod_kwh_j_dev * 30.0
+                    kwh_mensuel_apres_dev = max(kwh_mensuel_total_dev - kwh_mensuel_solaire_dev, 0.0)
+                    # Avant
+                    p1_av = min(150.0, kwh_mensuel_total_dev)
+                    p2_av = min(max(kwh_mensuel_total_dev - 150.0, 0.0), 100.0)
+                    p3_av = max(kwh_mensuel_total_dev - 250.0, 0.0)
+                    cout_mensuel_avant_dev = p1_av * t1 + p2_av * t2 + p3_av * t3
+                    # Après
+                    p1_ap = min(150.0, kwh_mensuel_apres_dev)
+                    p2_ap = min(max(kwh_mensuel_apres_dev - 150.0, 0.0), 100.0)
+                    p3_ap = max(kwh_mensuel_apres_dev - 250.0, 0.0)
+                    cout_mensuel_apres_dev = p1_ap * t1 + p2_ap * t2 + p3_ap * t3
+                    economie_mensuelle_dev = max(cout_mensuel_avant_dev - cout_mensuel_apres_dev, 0.0)
+
+                    economie_annuelle = st.session_state.get('economie_annuelle', economie_mensuelle_dev * 12)
+                    economie_10ans = st.session_state.get('economie_10ans', economie_annuelle * 10)
+                    retour_investissement = st.session_state.get('retour_investissement', (devis['total'] / economie_annuelle if economie_annuelle > 0 else float('inf')))
+                except Exception:
+                    economie_annuelle = 0
+                    economie_10ans = 0
+                    retour_investissement = float('inf')
+
+                devis_text = f"""
 ╔════════════════════════════════════════════════════════════════╗
 ║        DEVIS ESTIMATIF - INSTALLATION SOLAIRE SÉNÉGAL         ║
 ╚════════════════════════════════════════════════════════════════╝
@@ -2678,15 +3002,15 @@ Type onduleur           : {st.session_state.choix['type_onduleur']}
 📦 DÉTAILS DES ÉQUIPEMENTS
 {'─' * 64}
 """
-            for item in devis["details"]:
-                devis_text += f"""
+                for item in devis["details"]:
+                    devis_text += f"""
 {item['item']}
   Quantité        : {item['quantite']}
   Prix unitaire   : {item['prix_unitaire']:,} FCFA
   Sous-total      : {item['sous_total']:,} FCFA
 """
-            
-            devis_text += f"""
+                
+                devis_text += f"""
 {'═' * 64}
 💰 TOTAL ESTIMATIF : {devis['total']:,} FCFA
 {'═' * 64}
@@ -2710,508 +3034,511 @@ Document généré automatiquement
 Pour plus d'informations : energiesolairesenegal.com
 {'═' * 64}
 """
-            
-            # Génération du devis Word (.docx) avec tableau professionnel
-            doc = Document()
-            
-            # En-tête avec logo
-            header_paragraph = doc.add_paragraph()
-            header_paragraph.alignment = 1  # Centré
-            
-            # Ajouter le logo s'il existe
-            try:
-                if os.path.exists("logo-solaire.svg"):
-                    # Convertir SVG en image temporaire pour Word (python-docx ne supporte pas SVG directement)
-                    # Pour l'instant, on ajoute juste le texte avec emoji
-                    run = header_paragraph.add_run("☀️ ENERGIE SOLAIRE SÉNÉGAL\n")
-                    run.font.size = Pt(16)
-                    run.bold = True
-                else:
-                    run = header_paragraph.add_run("☀️ ENERGIE SOLAIRE SÉNÉGAL\n")
-                    run.font.size = Pt(16)
-                    run.bold = True
-            except:
-                run = header_paragraph.add_run("☀️ ENERGIE SOLAIRE SÉNÉGAL\n")
-                run.font.size = Pt(16)
-                run.bold = True
-            
-            # Titre principal
-            title = doc.add_heading('DEVIS ESTIMATIF - INSTALLATION SOLAIRE SÉNÉGAL', 0)
-            title.alignment = 1  # Centré
-            
-            # Informations client
-            doc.add_heading('👤 INFORMATIONS CLIENT', level=1)
-            client_table = doc.add_table(rows=2, cols=2)
-            client_table.style = 'Table Grid'
-            client_table.cell(0, 0).text = 'Nom du demandeur'
-            client_table.cell(0, 1).text = nom_demandeur if nom_demandeur else "Non renseigné"
-            client_table.cell(1, 0).text = 'Région d\'installation'
-            client_table.cell(1, 1).text = region_selectionnee
-            
-            # Résumé du système
-            doc.add_heading('📊 RÉSUMÉ DU SYSTÈME', level=1)
-            resume_table = doc.add_table(rows=6, cols=2)
-            resume_table.style = 'Table Grid'
-            resume_table.cell(0, 0).text = 'Consommation totale'
-            resume_table.cell(0, 1).text = f"{st.session_state.consommation:.1f} kWh/jour"
-            resume_table.cell(1, 0).text = 'Autonomie souhaitée'
-            resume_table.cell(1, 1).text = f"{(st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)} %"
-            resume_table.cell(2, 0).text = 'Puissance installée'
-            resume_table.cell(2, 1).text = f"{devis['puissance_totale']:.2f} kWc"
-            resume_table.cell(3, 0).text = 'Type de batterie'
-            resume_table.cell(3, 1).text = st.session_state.choix['type_batterie']
-            resume_table.cell(4, 0).text = 'Voltage système'
-            voltage_display = st.session_state.choix['voltage']
-            resume_table.cell(4, 1).text = voltage_display if voltage_display == "High Voltage" else f"{voltage_display}V"
-            resume_table.cell(5, 0).text = 'Type onduleur'
-            resume_table.cell(5, 1).text = st.session_state.choix['type_onduleur']
-            
-            # Tableau des équipements
-            doc.add_heading('📦 DÉTAILS DES ÉQUIPEMENTS', level=1)
-            equip_table = doc.add_table(rows=len(devis['details']) + 1, cols=4)
-            equip_table.style = 'Table Grid'
-            
-            # En-têtes du tableau
-            hdr_cells = equip_table.rows[0].cells
-            hdr_cells[0].text = 'Équipement'
-            hdr_cells[1].text = 'Quantité'
-            hdr_cells[2].text = 'Prix unitaire (FCFA)'
-            hdr_cells[3].text = 'Sous-total (FCFA)'
-            
-            # Données du tableau
-            for i, item in enumerate(devis['details']):
-                row_cells = equip_table.rows[i + 1].cells
-                row_cells[0].text = item['item']
-                row_cells[1].text = str(item['quantite'])
-                row_cells[2].text = f"{item['prix_unitaire']:,}"
-                row_cells[3].text = f"{item['sous_total']:,}"
-            
-            # Total
-            doc.add_heading('💰 TOTAL ESTIMATIF', level=1)
-            total_table = doc.add_table(rows=1, cols=2)
-            total_table.style = 'Table Grid'
-            total_table.cell(0, 0).text = 'TOTAL'
-            total_table.cell(0, 1).text = f"{devis['total']:,} FCFA"
-            
-            # Analyse financière
-            doc.add_heading('💡 ANALYSE FINANCIÈRE', level=1)
-            analyse_table = doc.add_table(rows=3, cols=2)
-            analyse_table.style = 'Table Grid'
-            analyse_table.cell(0, 0).text = 'Économie annuelle estimée'
-            analyse_table.cell(0, 1).text = f"{economie_annuelle:,.0f} FCFA"
-            analyse_table.cell(1, 0).text = 'Économie sur 10 ans'
-            analyse_table.cell(1, 1).text = f"{economie_10ans:,.0f} FCFA"
-            analyse_table.cell(2, 0).text = 'Retour sur investissement'
-            analyse_table.cell(2, 1).text = f"{retour_investissement:.1f} ans"
-            
-            # Notes importantes
-            doc.add_heading('📝 NOTES IMPORTANTES', level=1)
-            notes = [
-                "• Prix indicatifs",
-                "• Installation standard incluse",
-                "• Garantie selon fabricant (panneaux: 25 ans, batteries: variable)",
-                "• Maintenance recommandée tous les 6 mois"
-            ]
-            for note in notes:
-                doc.add_paragraph(note)
-            
-            # Informations de contact Energie Solaire Sénégal
-            doc.add_heading('📞 INFORMATIONS DE CONTACT', level=1)
-            contact_table = doc.add_table(rows=5, cols=2)
-            contact_table.style = 'Table Grid'
-            contact_table.cell(0, 0).text = '🏢 Entreprise'
-            contact_table.cell(0, 1).text = 'Energie Solaire Sénégal'
-            contact_table.cell(1, 0).text = '📍 Adresse'
-            contact_table.cell(1, 1).text = 'Castor 221 Dakar, Sénégal (En face du terrain de Football)'
-            contact_table.cell(2, 0).text = '📧 Email'
-            contact_table.cell(2, 1).text = 'energiesolairesenegal@gmail.com'
-            contact_table.cell(3, 0).text = '📞 Téléphones'
-            contact_table.cell(3, 1).text = '+221 77 631 42 25 / +221 78 177 39 26'
-            contact_table.cell(4, 0).text = '🌐 Site web'
-            contact_table.cell(4, 1).text = 'energiesolairesenegal.com'
-            
-            # Pied de page
-            doc.add_paragraph()
-            footer = doc.add_paragraph("Document généré automatiquement")
-            footer.alignment = 1  # Centré
-            footer_info = doc.add_paragraph("Votre partenaire de confiance pour l'énergie solaire au Sénégal")
-            footer_info.alignment = 1  # Centré
-            
-            docx_buffer = io.BytesIO()
-            doc.save(docx_buffer)
-            docx_buffer.seek(0)
-            st.download_button(
-                "📥 Télécharger le devis (Word .docx)",
-                docx_buffer.getvalue(),
-                file_name=f"devis_solaire_{st.session_state.choix['voltage']}V.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True
-            )
-        
-        with col_dl2:
-            # Génération Excel (.xlsx) avec mise en forme professionnelle
-            from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
-            from openpyxl.utils.dataframe import dataframe_to_rows
-            from openpyxl import Workbook
-            
-            # Créer un nouveau classeur
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Devis Solaire"
-            
-            # Styles
-            header_font = Font(bold=True, color="FFFFFF", size=12)
-            header_fill = PatternFill(start_color="4CAF50", end_color="4CAF50", fill_type="solid")
-            title_font = Font(bold=True, size=14, color="2E7D32")
-            border = Border(left=Side(style='thin'), right=Side(style='thin'), 
-                          top=Side(style='thin'), bottom=Side(style='thin'))
-            center_alignment = Alignment(horizontal='center', vertical='center')
-            
-            # En-tête du document
-            ws.merge_cells('A1:E1')
-            ws['A1'] = "DEVIS ESTIMATIF - INSTALLATION SOLAIRE SÉNÉGAL"
-            ws['A1'].font = title_font
-            ws['A1'].alignment = center_alignment
-            
-            # Informations client
-            row = 3
-            ws[f'A{row}'] = "INFORMATIONS CLIENT"
-            ws[f'A{row}'].font = Font(bold=True, size=12)
-            row += 1
-            
-            nom_demandeur = st.session_state.get('nom_demandeur', 'Non renseigné')
-            region_selectionnee = st.session_state.get('region_selectionnee', 'Non spécifiée')
-            
-            ws[f'A{row}'] = f"Nom du demandeur: {nom_demandeur}"
-            row += 1
-            ws[f'A{row}'] = f"Région d'installation: {region_selectionnee}"
-            row += 2
-            
-            # Résumé du système
-            ws[f'A{row}'] = "RÉSUMÉ DU SYSTÈME"
-            ws[f'A{row}'].font = Font(bold=True, size=12)
-            row += 1
-            
-            ws[f'A{row}'] = f"Consommation totale: {st.session_state.consommation:.1f} kWh/jour"
-            row += 1
-            ws[f'A{row}'] = f"Puissance installée: {devis['puissance_totale']:.2f} kWc"
-            row += 1
-            ws[f'A{row}'] = f"Type de batterie: {st.session_state.choix['type_batterie']}"
-            row += 1
-            voltage_display = st.session_state.choix['voltage']
-            voltage_text = voltage_display if voltage_display == "High Voltage" else f"{voltage_display}V"
-            ws[f'A{row}'] = f"Voltage système: {voltage_text}"
-            row += 1
-            ws[f'A{row}'] = f"Type onduleur: {st.session_state.choix['type_onduleur']}"
-            row += 2
-            
-            # Tableau des équipements
-            ws[f'A{row}'] = "DÉTAILS DES ÉQUIPEMENTS"
-            ws[f'A{row}'].font = Font(bold=True, size=12)
-            row += 1
-            
-            # En-têtes du tableau
-            headers = ["Équipement", "Quantité", "Prix unitaire (FCFA)", "Sous-total (FCFA)"]
-            for col, header in enumerate(headers, 1):
-                cell = ws.cell(row=row, column=col, value=header)
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.border = border
-                cell.alignment = center_alignment
-            
-            row += 1
-            
-            # Données des équipements
-            for item in devis["details"]:
-                ws.cell(row=row, column=1, value=item["item"]).border = border
-                ws.cell(row=row, column=2, value=item["quantite"]).border = border
-                ws.cell(row=row, column=3, value=f"{item['prix_unitaire']:,}").border = border
-                ws.cell(row=row, column=4, value=f"{item['sous_total']:,}").border = border
-                row += 1
-            
-            # Ligne de total
-            ws.cell(row=row, column=1, value="TOTAL").font = Font(bold=True)
-            ws.cell(row=row, column=1).border = border
-            ws.cell(row=row, column=2, value="").border = border
-            ws.cell(row=row, column=3, value="").border = border
-            total_cell = ws.cell(row=row, column=4, value=f"{devis['total']:,}")
-            total_cell.font = Font(bold=True)
-            total_cell.border = border
-            total_cell.fill = PatternFill(start_color="E8F5E8", end_color="E8F5E8", fill_type="solid")
-            
-            # Ajuster la largeur des colonnes
-            ws.column_dimensions['A'].width = 40
-            ws.column_dimensions['B'].width = 12
-            ws.column_dimensions['C'].width = 20
-            ws.column_dimensions['D'].width = 20
-            
-            # Notes importantes
-            row += 3
-            ws[f'A{row}'] = "NOTES IMPORTANTES"
-            ws[f'A{row}'].font = Font(bold=True, size=12)
-            row += 1
-            
-            notes = [
-                "• Prix indicatifs",
-                "• Installation standard incluse",
-                "• Garantie selon fabricant (panneaux: 25 ans, batteries: variable)",
-                "• Maintenance recommandée tous les 6 mois"
-            ]
-            
-            for note in notes:
-                ws[f'A{row}'] = note
-                row += 1
-            
-            # Contact
-            row += 2
-            ws[f'A{row}'] = "CONTACT - ENERGIE SOLAIRE SÉNÉGAL"
-            ws[f'A{row}'].font = Font(bold=True, size=12, color="4CAF50")
-            row += 1
-            ws[f'A{row}'] = "📍 Castor 221 Dakar, Sénégal (En face du terrain de Football)"
-            row += 1
-            ws[f'A{row}'] = "📧 energiesolairesenegal@gmail.com"
-            row += 1
-            ws[f'A{row}'] = "📞 +221 77 631 42 25 / +221 78 177 39 26"
-            row += 1
-            ws[f'A{row}'] = "🌐 energiesolairesenegal.com"
-            
-            # Sauvegarder dans un buffer
-            xlsx_buffer = io.BytesIO()
-            wb.save(xlsx_buffer)
-            xlsx_buffer.seek(0)
-            
-            st.download_button(
-                "📊 Télécharger (Excel .xlsx)",
-                xlsx_buffer.getvalue(),
-                file_name=f"devis_solaire_{st.session_state.choix['voltage']}V.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-        
-        # Partage de devis avec coordonnées (formulaire détaillé)
-        st.markdown("---")
-        st.markdown("### 📤 Partager mon devis au service technique")
-        
-        with st.expander("📋 Partager mon devis au service technique", expanded=False):
-            st.info("✉️ Remplissez ce formulaire pour partager votre devis au service technique. Ces informations facilitent un suivi rapide.")
-            
-            with st.form("form_partage_devis"):
-                col_contact1_dev, col_contact2_dev = st.columns(2)
                 
-                with col_contact1_dev:
-                    nom_dev = st.text_input("👤 Nom complet *", placeholder="Ex: Amadou Diallo")
-                    tel_dev = st.text_input("📱 Téléphone *", placeholder="Ex: +221 77 123 45 67")
-                    email_dev = st.text_input("📧 Email *", placeholder="Ex: amadou@example.com")
+                # Génération du devis Word (.docx) avec tableau professionnel
+                doc = Document()
                 
-                with col_contact2_dev:
-                    ville_dev = st.text_input("🏙️ Ville *", placeholder="Ex: Dakar")
-                    quartier_dev = st.text_input("📍 Quartier/Zone", placeholder="Ex: Plateau, Almadies...")
-                    type_batiment_dev = st.selectbox("🏠 Type de bâtiment", 
-                                                   ["Maison individuelle", "Appartement", "Commerce", "Bureau", "Industrie", "Autre"])
+                # En-tête avec logo
+                header_paragraph = doc.add_paragraph()
+                header_paragraph.alignment = 1  # Centré
                 
-                # Informations sur le projet
-                st.markdown("#### 🔧 Détails du projet")
-                col_projet1_dev, col_projet2_dev = st.columns(2)
-                
-                with col_projet1_dev:
-                    urgence_dev = st.selectbox("⏰ Urgence du projet", 
-                                             ["Pas urgent (> 6 mois)", "Moyen terme (3-6 mois)", "Court terme (1-3 mois)", "Urgent (< 1 mois)"])
-                    budget_estime_dev = st.selectbox("💰 Budget estimé", 
-                                                   ["< 500 000 FCFA", "500 000 - 1 000 000 FCFA", "1 000 000 - 2 000 000 FCFA", 
-                                                    "2 000 000 - 5 000 000 FCFA", "> 5 000 000 FCFA", "À définir"])
-                
-                with col_projet2_dev:
-                    installation_existante_dev = st.radio("⚡ Installation électrique existante", 
-                                                     ["Raccordé au réseau SENELEC", "Groupe électrogène", "Aucune installation", "Autre"])
-                    visite_technique_dev = st.checkbox("🔍 Demander une visite technique sur site")
-                
-                # Zone de commentaires
-                commentaires_dev = st.text_area("💬 Questions ou commentaires spécifiques", 
-                                              placeholder="Décrivez vos besoins spécifiques, contraintes, questions...", 
-                                              height=100)
-                
-                # Consentement
-                consent_dev = st.checkbox("✅ J'accepte d'être contacté par l'équipe technique d'Energie Solaire Sénégal *")
-                
-                # Bouton de soumission
-                if st.form_submit_button("📤 Envoyer mon devis", type="primary", use_container_width=True):
-                    # Validation des champs obligatoires
-                    if not nom_dev or not tel_dev or not ville_dev or not email_dev or not consent_dev:
-                        st.error("❌ Veuillez remplir les champs obligatoires (*) dont l’email, et accepter d'être contacté.")
-                    elif '@' not in email_dev or '.' not in email_dev.split('@')[-1]:
-                        st.error("❌ Email invalide.")
+                # Ajouter le logo s'il existe
+                try:
+                    if os.path.exists("logo-solaire.svg"):
+                        # Convertir SVG en image temporaire pour Word (python-docx ne supporte pas SVG directement)
+                        # Pour l'instant, on ajoute juste le texte avec emoji
+                        run = header_paragraph.add_run("☀️ ENERGIE SOLAIRE SÉNÉGAL\n")
+                        run.font.size = Pt(16)
+                        run.bold = True
                     else:
-                        quote_data = {
-                            'timestamp': pd.Timestamp.now().isoformat(),
-                            'consommation_kwh_jour': st.session_state.consommation,
-                            'voltage_systeme': st.session_state.choix['voltage'],
-                            'type_batterie': st.session_state.choix['type_batterie'],
-                            'type_onduleur': st.session_state.choix['type_onduleur'],
-                            'puissance_totale_kwc': devis['puissance_totale'],
-                            'autonomie_souhaitee_pct': st.session_state.get('autonomie_pct', 100),
-                            'autonomie_reelle_pct': st.session_state.get('autonomie_reelle_pct', 100),
-                            'prix_total_fcfa': devis['total'],
-                            'details_equipements': devis['details'],
-                            'economie_mensuelle_fcfa': economie_mensuelle,
-                            'retour_investissement_ans': retour_investissement,
-                            'contact_info': {
-                                'name': nom_dev.strip(),
-                                'phone': tel_dev.strip(),
-                                'email': email_dev.strip(),
-                                'ville': ville_dev.strip(),
-                                'quartier': quartier_dev.strip(),
-                                'type_batiment': type_batiment_dev,
-                                'urgence': urgence_dev,
-                                'budget_estime': budget_estime_dev,
-                                'installation_existante': installation_existante_dev,
-                                'visite_technique': bool(visite_technique_dev),
-                                'commentaires': commentaires_dev.strip(),
-                                'demande_contact': bool(consent_dev),
-                                'source': 'Application Dimensionnement Solaire - Devis Client'
-                            }
-                        }
-                        quote_id = save_quote_to_firebase(quote_data)
-                        if quote_id:
-                            st.success(f"✅ Devis envoyé au service technique ! Référence: {quote_id[:8]}")
-                            st.balloons()
+                        run = header_paragraph.add_run("☀️ ENERGIE SOLAIRE SÉNÉGAL\n")
+                        run.font.size = Pt(16)
+                        run.bold = True
+                except:
+                    run = header_paragraph.add_run("☀️ ENERGIE SOLAIRE SÉNÉGAL\n")
+                    run.font.size = Pt(16)
+                    run.bold = True
+                
+                # Titre principal
+                title = doc.add_heading('DEVIS ESTIMATIF - INSTALLATION SOLAIRE SÉNÉGAL', 0)
+                title.alignment = 1  # Centré
+                
+                # Informations client
+                doc.add_heading('👤 INFORMATIONS CLIENT', level=1)
+                client_table = doc.add_table(rows=2, cols=2)
+                client_table.style = 'Table Grid'
+                client_table.cell(0, 0).text = 'Nom du demandeur'
+                client_table.cell(0, 1).text = nom_demandeur if nom_demandeur else "Non renseigné"
+                client_table.cell(1, 0).text = 'Région d\'installation'
+                client_table.cell(1, 1).text = region_selectionnee
+                
+                # Résumé du système
+                doc.add_heading('📊 RÉSUMÉ DU SYSTÈME', level=1)
+                resume_table = doc.add_table(rows=6, cols=2)
+                resume_table.style = 'Table Grid'
+                resume_table.cell(0, 0).text = 'Consommation totale'
+                resume_table.cell(0, 1).text = f"{st.session_state.consommation:.1f} kWh/jour"
+                resume_table.cell(1, 0).text = 'Autonomie souhaitée'
+                resume_table.cell(1, 1).text = f"{(st.session_state.autonomie_pct if 'autonomie_pct' in st.session_state else 100)} %"
+                resume_table.cell(2, 0).text = 'Puissance installée'
+                resume_table.cell(2, 1).text = f"{devis['puissance_totale']:.2f} kWc"
+                resume_table.cell(3, 0).text = 'Type de batterie'
+                resume_table.cell(3, 1).text = st.session_state.choix['type_batterie']
+                resume_table.cell(4, 0).text = 'Voltage système'
+                voltage_display = st.session_state.choix['voltage']
+                resume_table.cell(4, 1).text = voltage_display if voltage_display == "High Voltage" else f"{voltage_display}V"
+                resume_table.cell(5, 0).text = 'Type onduleur'
+                resume_table.cell(5, 1).text = st.session_state.choix['type_onduleur']
+                
+                # Tableau des équipements
+                doc.add_heading('📦 DÉTAILS DES ÉQUIPEMENTS', level=1)
+                equip_table = doc.add_table(rows=len(devis['details']) + 1, cols=4)
+                equip_table.style = 'Table Grid'
+                
+                # En-têtes du tableau
+                hdr_cells = equip_table.rows[0].cells
+                hdr_cells[0].text = 'Équipement'
+                hdr_cells[1].text = 'Quantité'
+                hdr_cells[2].text = 'Prix unitaire (FCFA)'
+                hdr_cells[3].text = 'Sous-total (FCFA)'
+                
+                # Données du tableau
+                for i, item in enumerate(devis['details']):
+                    row_cells = equip_table.rows[i + 1].cells
+                    row_cells[0].text = item['item']
+                    row_cells[1].text = str(item['quantite'])
+                    row_cells[2].text = f"{item['prix_unitaire']:,}"
+                    row_cells[3].text = f"{item['sous_total']:,}"
+                
+                # Total
+                doc.add_heading('💰 TOTAL ESTIMATIF', level=1)
+                total_table = doc.add_table(rows=1, cols=2)
+                total_table.style = 'Table Grid'
+                total_table.cell(0, 0).text = 'TOTAL'
+                total_table.cell(0, 1).text = f"{devis['total']:,} FCFA"
+                
+                # Analyse financière
+                doc.add_heading('💡 ANALYSE FINANCIÈRE', level=1)
+                analyse_table = doc.add_table(rows=3, cols=2)
+                analyse_table.style = 'Table Grid'
+                analyse_table.cell(0, 0).text = 'Économie annuelle estimée'
+                analyse_table.cell(0, 1).text = f"{economie_annuelle:,.0f} FCFA"
+                analyse_table.cell(1, 0).text = 'Économie sur 10 ans'
+                analyse_table.cell(1, 1).text = f"{economie_10ans:,.0f} FCFA"
+                analyse_table.cell(2, 0).text = 'Retour sur investissement'
+                analyse_table.cell(2, 1).text = f"{retour_investissement:.1f} ans"
+                
+                # Notes importantes
+                doc.add_heading('📝 NOTES IMPORTANTES', level=1)
+                notes = [
+                    "• Prix indicatifs",
+                    "• Installation standard incluse",
+                    "• Garantie selon fabricant (panneaux: 25 ans, batteries: variable)",
+                    "• Maintenance recommandée tous les 6 mois"
+                ]
+                for note in notes:
+                    doc.add_paragraph(note)
+                
+                # Informations de contact Energie Solaire Sénégal
+                doc.add_heading('📞 INFORMATIONS DE CONTACT', level=1)
+                contact_table = doc.add_table(rows=5, cols=2)
+                contact_table.style = 'Table Grid'
+                contact_table.cell(0, 0).text = '🏢 Entreprise'
+                contact_table.cell(0, 1).text = 'Energie Solaire Sénégal'
+                contact_table.cell(1, 0).text = '📍 Adresse'
+                contact_table.cell(1, 1).text = 'Castor 221 Dakar, Sénégal (En face du terrain de Football)'
+                contact_table.cell(2, 0).text = '📧 Email'
+                contact_table.cell(2, 1).text = 'energiesolairesenegal@gmail.com'
+                contact_table.cell(3, 0).text = '📞 Téléphones'
+                contact_table.cell(3, 1).text = '+221 77 631 42 25 / +221 78 177 39 26'
+                contact_table.cell(4, 0).text = '🌐 Site web'
+                contact_table.cell(4, 1).text = 'energiesolairesenegal.com'
+                
+                # Pied de page
+                doc.add_paragraph()
+                footer = doc.add_paragraph("Document généré automatiquement")
+                footer.alignment = 1  # Centré
+                footer_info = doc.add_paragraph("Votre partenaire de confiance pour l'énergie solaire au Sénégal")
+                footer_info.alignment = 1  # Centré
+                
+                docx_buffer = io.BytesIO()
+                doc.save(docx_buffer)
+                docx_buffer.seek(0)
+                st.download_button(
+                    "📥 Télécharger le devis (Word .docx)",
+                    docx_buffer.getvalue(),
+                    file_name=f"devis_solaire_{st.session_state.choix['voltage']}V.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+            
+            with col_dl2:
+                # Génération Excel (.xlsx) avec mise en forme professionnelle
+                from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+                from openpyxl.utils.dataframe import dataframe_to_rows
+                from openpyxl import Workbook
+                
+                # Créer un nouveau classeur
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "Devis Solaire"
+                
+                # Styles
+                header_font = Font(bold=True, color="FFFFFF", size=12)
+                header_fill = PatternFill(start_color="4CAF50", end_color="4CAF50", fill_type="solid")
+                title_font = Font(bold=True, size=14, color="2E7D32")
+                border = Border(left=Side(style='thin'), right=Side(style='thin'), 
+                              top=Side(style='thin'), bottom=Side(style='thin'))
+                center_alignment = Alignment(horizontal='center', vertical='center')
+                
+                # En-tête du document
+                ws.merge_cells('A1:E1')
+                ws['A1'] = "DEVIS ESTIMATIF - INSTALLATION SOLAIRE SÉNÉGAL"
+                ws['A1'].font = title_font
+                ws['A1'].alignment = center_alignment
+                
+                # Informations client
+                row = 3
+                ws[f'A{row}'] = "INFORMATIONS CLIENT"
+                ws[f'A{row}'].font = Font(bold=True, size=12)
+                row += 1
+                
+                nom_demandeur = st.session_state.get('nom_demandeur', 'Non renseigné')
+                region_selectionnee = st.session_state.get('region_selectionnee', 'Non spécifiée')
+                
+                ws[f'A{row}'] = f"Nom du demandeur: {nom_demandeur}"
+                row += 1
+                ws[f'A{row}'] = f"Région d'installation: {region_selectionnee}"
+                row += 2
+                
+                # Résumé du système
+                ws[f'A{row}'] = "RÉSUMÉ DU SYSTÈME"
+                ws[f'A{row}'].font = Font(bold=True, size=12)
+                row += 1
+                
+                ws[f'A{row}'] = f"Consommation totale: {st.session_state.consommation:.1f} kWh/jour"
+                row += 1
+                ws[f'A{row}'] = f"Puissance installée: {devis['puissance_totale']:.2f} kWc"
+                row += 1
+                ws[f'A{row}'] = f"Type de batterie: {st.session_state.choix['type_batterie']}"
+                row += 1
+                voltage_display = st.session_state.choix['voltage']
+                voltage_text = voltage_display if voltage_display == "High Voltage" else f"{voltage_display}V"
+                ws[f'A{row}'] = f"Voltage système: {voltage_text}"
+                row += 1
+                ws[f'A{row}'] = f"Type onduleur: {st.session_state.choix['type_onduleur']}"
+                row += 2
+                
+                # Tableau des équipements
+                ws[f'A{row}'] = "DÉTAILS DES ÉQUIPEMENTS"
+                ws[f'A{row}'].font = Font(bold=True, size=12)
+                row += 1
+                
+                # En-têtes du tableau
+                headers = ["Équipement", "Quantité", "Prix unitaire (FCFA)", "Sous-total (FCFA)"]
+                for col, header in enumerate(headers, 1):
+                    cell = ws.cell(row=row, column=col, value=header)
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.border = border
+                    cell.alignment = center_alignment
+                
+                row += 1
+                
+                # Données des équipements
+                for item in devis["details"]:
+                    ws.cell(row=row, column=1, value=item["item"]).border = border
+                    ws.cell(row=row, column=2, value=item["quantite"]).border = border
+                    ws.cell(row=row, column=3, value=f"{item['prix_unitaire']:,}").border = border
+                    ws.cell(row=row, column=4, value=f"{item['sous_total']:,}").border = border
+                    row += 1
+                
+                # Ligne de total
+                ws.cell(row=row, column=1, value="TOTAL").font = Font(bold=True)
+                ws.cell(row=row, column=1).border = border
+                ws.cell(row=row, column=2, value="").border = border
+                ws.cell(row=row, column=3, value="").border = border
+                total_cell = ws.cell(row=row, column=4, value=f"{devis['total']:,}")
+                total_cell.font = Font(bold=True)
+                total_cell.border = border
+                total_cell.fill = PatternFill(start_color="E8F5E8", end_color="E8F5E8", fill_type="solid")
+                
+                # Ajuster la largeur des colonnes
+                ws.column_dimensions['A'].width = 40
+                ws.column_dimensions['B'].width = 12
+                ws.column_dimensions['C'].width = 20
+                ws.column_dimensions['D'].width = 20
+                
+                # Notes importantes
+                row += 3
+                ws[f'A{row}'] = "NOTES IMPORTANTES"
+                ws[f'A{row}'].font = Font(bold=True, size=12)
+                row += 1
+                
+                notes = [
+                    "• Prix indicatifs",
+                    "• Installation standard incluse",
+                    "• Garantie selon fabricant (panneaux: 25 ans, batteries: variable)",
+                    "• Maintenance recommandée tous les 6 mois"
+                ]
+                
+                for note in notes:
+                    ws[f'A{row}'] = note
+                    row += 1
+                
+                # Contact
+                row += 2
+                ws[f'A{row}'] = "CONTACT - ENERGIE SOLAIRE SÉNÉGAL"
+                ws[f'A{row}'].font = Font(bold=True, size=12, color="4CAF50")
+                row += 1
+                ws[f'A{row}'] = "📍 Castor 221 Dakar, Sénégal (En face du terrain de Football)"
+                row += 1
+                ws[f'A{row}'] = "📧 energiesolairesenegal@gmail.com"
+                row += 1
+                ws[f'A{row}'] = "📞 +221 77 631 42 25 / +221 78 177 39 26"
+                row += 1
+                ws[f'A{row}'] = "🌐 energiesolairesenegal.com"
+                
+                # Sauvegarder dans un buffer
+                xlsx_buffer = io.BytesIO()
+                wb.save(xlsx_buffer)
+                xlsx_buffer.seek(0)
+                
+                st.download_button(
+                    "📊 Télécharger (Excel .xlsx)",
+                    xlsx_buffer.getvalue(),
+                    file_name=f"devis_solaire_{st.session_state.choix['voltage']}V.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            
+            # Partage de devis avec coordonnées (formulaire détaillé)
+            st.markdown("---")
+            st.markdown("### 📤 Partager mon devis au service technique")
+            
+            with st.expander("📋 Partager mon devis au service technique", expanded=False):
+                st.info("✉️ Remplissez ce formulaire pour partager votre devis au service technique. Ces informations facilitent un suivi rapide.")
+                
+                with st.form("form_partage_devis"):
+                    col_contact1_dev, col_contact2_dev = st.columns(2)
+                    
+                    with col_contact1_dev:
+                        nom_dev = st.text_input("👤 Nom complet *", placeholder="Ex: Amadou Diallo")
+                        tel_dev = st.text_input("📱 Téléphone *", placeholder="Ex: +221 77 123 45 67")
+                        email_dev = st.text_input("📧 Email *", placeholder="Ex: amadou@example.com")
+                    
+                    with col_contact2_dev:
+                        ville_dev = st.text_input("🏙️ Ville *", placeholder="Ex: Dakar")
+                        quartier_dev = st.text_input("📍 Quartier/Zone", placeholder="Ex: Plateau, Almadies...")
+                        type_batiment_dev = st.selectbox("🏠 Type de bâtiment", 
+                                                       ["Maison individuelle", "Appartement", "Commerce", "Bureau", "Industrie", "Autre"])
+                    
+                    # Informations sur le projet
+                    st.markdown("#### 🔧 Détails du projet")
+                    col_projet1_dev, col_projet2_dev = st.columns(2)
+                    
+                    with col_projet1_dev:
+                        urgence_dev = st.selectbox("⏰ Urgence du projet", 
+                                                 ["Pas urgent (> 6 mois)", "Moyen terme (3-6 mois)", "Court terme (1-3 mois)", "Urgent (< 1 mois)"])
+                        budget_estime_dev = st.selectbox("💰 Budget estimé", 
+                                                       ["< 500 000 FCFA", "500 000 - 1 000 000 FCFA", "1 000 000 - 2 000 000 FCFA", 
+                                                        "2 000 000 - 5 000 000 FCFA", "> 5 000 000 FCFA", "À définir"])
+                    
+                    with col_projet2_dev:
+                        installation_existante_dev = st.radio("⚡ Installation électrique existante", 
+                                                         ["Raccordé au réseau SENELEC", "Groupe électrogène", "Aucune installation", "Autre"])
+                        visite_technique_dev = st.checkbox("🔍 Demander une visite technique sur site")
+                    
+                    # Zone de commentaires
+                    commentaires_dev = st.text_area("💬 Questions ou commentaires spécifiques", 
+                                                  placeholder="Décrivez vos besoins spécifiques, contraintes, questions...", 
+                                                  height=100)
+                    
+                    # Consentement
+                    consent_dev = st.checkbox("✅ J'accepte d'être contacté par l'équipe technique d'Energie Solaire Sénégal *")
+                    
+                    # Bouton de soumission
+                    if st.form_submit_button("📤 Envoyer mon devis", type="primary", use_container_width=True):
+                        # Validation des champs obligatoires
+                        if not nom_dev or not tel_dev or not ville_dev or not email_dev or not consent_dev:
+                            st.error("❌ Veuillez remplir les champs obligatoires (*) dont l'email, et accepter d'être contacté.")
+                        elif '@' not in email_dev or '.' not in email_dev.split('@')[-1]:
+                            st.error("❌ Email invalide.")
                         else:
-                            st.error("❌ Erreur lors du partage")
+                                quote_data = {
+                                    'timestamp': pd.Timestamp.now().isoformat(),
+                                    'consommation_kwh_jour': st.session_state.consommation,
+                                    'voltage_systeme': st.session_state.choix['voltage'],
+                                    'type_batterie': st.session_state.choix['type_batterie'],
+                                    'type_onduleur': st.session_state.choix['type_onduleur'],
+                                    'puissance_totale_kwc': devis['puissance_totale'],
+                                    'autonomie_souhaitee_pct': st.session_state.get('autonomie_pct', 100),
+                                    'autonomie_reelle_pct': st.session_state.get('autonomie_reelle_pct', 100),
+                                    'prix_total_fcfa': devis['total'],
+                                    'details_equipements': devis['details'],
+                                    'economie_mensuelle_fcfa': economie_mensuelle,
+                                    'retour_investissement_ans': retour_investissement,
+                                    'contact_info': {
+                                        'name': nom_dev.strip(),
+                                        'phone': tel_dev.strip(),
+                                        'email': email_dev.strip(),
+                                        'ville': ville_dev.strip(),
+                                        'quartier': quartier_dev.strip(),
+                                        'type_batiment': type_batiment_dev,
+                                        'urgence': urgence_dev,
+                                        'budget_estime': budget_estime_dev,
+                                        'installation_existante': installation_existante_dev,
+                                        'visite_technique': bool(visite_technique_dev),
+                                        'commentaires': commentaires_dev.strip(),
+                                        'demande_contact': bool(consent_dev),
+                                        'source': 'Application Dimensionnement Solaire - Devis Client'
+                                    }
+                                }
+                                quote_id = save_quote_to_firebase(quote_data)
+                                if quote_id:
+                                    st.success(f"✅ Devis envoyé au service technique ! Référence: {quote_id[:8]}")
+                                    st.balloons()
+                                else:
+                                    st.error("❌ Erreur lors du partage")
+            
+            # (Section Demander un contact du support technique supprimée)
         
-        # (Section Demander un contact du support technique supprimée)
-        
-    # Notes importantes (placées en bas)
-    st.markdown("---")
-    st.markdown("### 📝 Notes importantes")
-    st.warning("""
+        # Notes importantes (placées en bas du tab Devis uniquement)
+        st.markdown("---")
+        st.markdown("### 📝 Notes importantes")
+        st.warning("""
 
-    **Le prix final peut varier selon :**
-    - La complexité de l'installation
-    - L'accessibilité du site
-    - Les promotions en cours
-    """)
-    
-    # Section de gestion du stock pour les administrateurs
-    if st.session_state.get('user_role') == 'admin' and 'equipements' in st.session_state:
-        st.markdown("---")
-        st.markdown("### 📦 Gestion du Stock - Équipements Dimensionnés")
+        **Le prix final peut varier selon :**
+        - La complexité de l'installation
+        - L'accessibilité du site
+        - Les promotions en cours
+        """)
         
-        with st.expander("🔄 Actions sur le stock", expanded=False):
-            st.info("💡 Gérez le stock des équipements sélectionnés pour ce dimensionnement")
+        # Section de gestion du stock pour les administrateurs (visible uniquement dans Devis)
+        if st.session_state.get('user_role') == 'admin' and 'equipements' in st.session_state:
+            st.markdown("---")
+            st.markdown("### 📦 Gestion du Stock - Équipements Dimensionnés")
             
-            # Récupération des équipements dimensionnés
-            equip = st.session_state.equipements
-            
-            # Vérification de la disponibilité en stock
-            st.markdown("#### 📊 Vérification de la disponibilité")
-            
-            equipements_necessaires = []
-            if equip["panneau"][0]:  # Si un panneau est sélectionné
-                equipements_necessaires.append({
-                    "type": "panneau",
-                    "nom": equip["panneau"][0],
-                    "quantite": equip["panneau"][1]
-                })
-            
-            if equip["batterie"][0]:  # Si une batterie est sélectionnée
-                equipements_necessaires.append({
-                    "type": "batterie", 
-                    "nom": equip["batterie"][0],
-                    "quantite": equip["batterie"][1]
-                })
-            
-            if equip["onduleur"][0]:  # Si un onduleur est sélectionné
-                onduleur_nom, nb_onduleurs = equip["onduleur"] if isinstance(equip["onduleur"], tuple) else (equip["onduleur"], 1)
-                equipements_necessaires.append({
-                    "type": "onduleur",
-                    "nom": onduleur_nom,
-                    "quantite": nb_onduleurs
-                })
-            
-            if equip["regulateur"]:  # Si un régulateur est sélectionné
-                equipements_necessaires.append({
-                    "type": "regulateur",
-                    "nom": equip["regulateur"],
-                    "quantite": 1
-                })
-            
-            # Vérification du stock
-            stock_status = check_stock_availability(equipements_necessaires)
-            
-            if stock_status["disponible"]:
-                st.success("✅ Tous les équipements sont disponibles en stock !")
-            else:
-                st.warning("⚠️ Certains équipements ne sont pas disponibles en quantité suffisante")
+            with st.expander("🔄 Actions sur le stock", expanded=False):
+                st.info("💡 Gérez le stock des équipements sélectionnés pour ce dimensionnement")
                 
-                if stock_status["manquants"]:
-                    st.markdown("**Équipements manquants :**")
-                    for item in stock_status["manquants"]:
-                        st.error(f"❌ {item['nom']} - Besoin: {item['quantite_demandee']}, Stock: {item['stock_disponible']}")
+                # Récupération des équipements dimensionnés
+                equip = st.session_state.equipements
                 
-                if stock_status["stock_faible"]:
-                    st.markdown("**Stock faible :**")
-                    for item in stock_status["stock_faible"]:
-                        st.warning(f"⚠️ {item['nom']} - Besoin: {item['quantite_demandee']}, Stock: {item['stock_disponible']}")
-            
-            # Actions sur le stock
-            st.markdown("#### ⚡ Actions rapides")
-            
-            col_action1, col_action2, col_action3 = st.columns(3)
-            
-            with col_action1:
-                pass  # Synchronisation dimensionnement → stock retirée
-            
-            with col_action2:
-                if st.button("📋 Créer devis/facture", use_container_width=True):
-                    # Rediriger vers l'éditeur de factures avec les équipements pré-remplis
-                    st.session_state['equipements_pour_facture'] = equipements_necessaires
-                    st.info("💡 Rendez-vous dans l'onglet 'Gestion de Stock' > 'Factures' pour créer le document")
-            
-            with col_action3:
-                if st.button("📦 Réserver le stock", use_container_width=True):
-                    if stock_status["disponible"]:
-                        # Simuler une réservation en créant un mouvement de stock
-                        for item in equipements_necessaires:
-                            # Ici on pourrait implémenter une vraie réservation
-                            # Pour l'instant, on affiche juste un message
-                            pass
-                        st.success("✅ Stock réservé pour ce devis (fonctionnalité à implémenter)")
-                    else:
-                        st.error("❌ Impossible de réserver - stock insuffisant")
-            
-            # Affichage détaillé du stock pour chaque équipement
-            st.markdown("#### 📋 Détail du stock par équipement")
-            
-            for item in equipements_necessaires:
-                with st.container():
-                    col_detail1, col_detail2, col_detail3 = st.columns([2, 1, 1])
+                # Vérification de la disponibilité en stock
+                st.markdown("#### 📊 Vérification de la disponibilité")
+                
+                equipements_necessaires = []
+                if equip["panneau"][0]:  # Si un panneau est sélectionné
+                    equipements_necessaires.append({
+                        "type": "panneau",
+                        "nom": equip["panneau"][0],
+                        "quantite": equip["panneau"][1]
+                    })
+                
+                if equip["batterie"][0]:  # Si une batterie est sélectionnée
+                    equipements_necessaires.append({
+                        "type": "batterie", 
+                        "nom": equip["batterie"][0],
+                        "quantite": equip["batterie"][1]
+                    })
+                
+                if equip["onduleur"][0]:  # Si un onduleur est sélectionné
+                    onduleur_nom, nb_onduleurs = equip["onduleur"] if isinstance(equip["onduleur"], tuple) else (equip["onduleur"], 1)
+                    equipements_necessaires.append({
+                        "type": "onduleur",
+                        "nom": onduleur_nom,
+                        "quantite": nb_onduleurs
+                    })
+                
+                if equip["regulateur"]:  # Si un régulateur est sélectionné
+                    equipements_necessaires.append({
+                        "type": "regulateur",
+                        "nom": equip["regulateur"],
+                        "quantite": 1
+                    })
+                
+                # Vérification du stock
+                stock_status = check_stock_availability(equipements_necessaires)
+                
+                if stock_status.get("available", False):
+                    st.success("✅ Tous les équipements sont disponibles en stock !")
+                else:
+                    st.warning("⚠️ Certains équipements ne sont pas disponibles en quantité suffisante")
                     
-                    with col_detail1:
-                        st.markdown(f"**{item['nom']}** ({item['type']})")
+                    if stock_status.get("missing_products", []):
+                        st.markdown("**Équipements manquants :**")
+                        for item in stock_status["missing_products"]:
+                            st.error(f"❌ {item['nom']} - Besoin: {item['quantite_demandee']}, Stock: {item.get('stock_actuel', 0)}")
                     
-                    with col_detail2:
-                        st.markdown(f"Besoin: **{item['quantite']}**")
-                    
-                    with col_detail3:
-                        stock_info = get_stock_for_dimensioning_product(item['type'], item['nom'])
-                        if stock_info:
-                            stock_qty = stock_info.get('quantite', 0)
-                            if stock_qty >= item['quantite']:
-                                st.success(f"Stock: {stock_qty}")
-                            elif stock_qty > 0:
-                                st.warning(f"Stock: {stock_qty}")
-                            else:
-                                st.error("Rupture")
+                    if stock_status.get("low_stock_products", []):
+                        st.markdown("**Stock faible :**")
+                        for item in stock_status["low_stock_products"]:
+                            st.warning(f"⚠️ {item['nom']} - Stock actuel: {item.get('stock_actuel', 0)}, Stock minimum: {item.get('stock_minimum', 0)}")
+                
+                # Actions sur le stock
+                st.markdown("#### ⚡ Actions rapides")
+                
+                col_action1, col_action2, col_action3 = st.columns(3)
+                
+                with col_action1:
+                    pass  # Synchronisation dimensionnement → stock retirée
+                
+                with col_action2:
+                    if st.button("📋 Créer devis/facture", use_container_width=True):
+                        # Rediriger vers l'éditeur de factures avec les équipements pré-remplis
+                        st.session_state['equipements_pour_facture'] = equipements_necessaires
+                        st.info("💡 Rendez-vous dans l'onglet 'Gestion de Stock' > 'Factures' pour créer le document")
+                
+                with col_action3:
+                    if st.button("📦 Réserver le stock", use_container_width=True):
+                        if stock_status.get("available", False):
+                            # Simuler une réservation en créant un mouvement de stock
+                            for item in equipements_necessaires:
+                                # Ici on pourrait implémenter une vraie réservation
+                                # Pour l'instant, on affiche juste un message
+                                pass
+                            st.success("✅ Stock réservé pour ce devis (fonctionnalité à implémenter)")
                         else:
-                            st.info("Non sync.")
+                            st.error("❌ Impossible de réserver - stock insuffisant")
+                
+                # Affichage détaillé du stock pour chaque équipement
+                st.markdown("#### 📋 Détail du stock par équipement")
+                
+                for item in equipements_necessaires:
+                    with st.container():
+                        col_detail1, col_detail2, col_detail3 = st.columns([2, 1, 1])
+                        
+                        with col_detail1:
+                            st.markdown(f"**{item['nom']}** ({item['type']})")
+                        
+                        with col_detail2:
+                            st.markdown(f"Besoin: **{item['quantite']}**")
+                        
+                        with col_detail3:
+                            stock_info = get_stock_for_dimensioning_product(item['nom'])
+                            if stock_info:
+                                stock_qty = stock_info.get('quantite', 0)
+                                if stock_qty >= item['quantite']:
+                                    st.success(f"Stock: {stock_qty}")
+                                elif stock_qty > 0:
+                                    st.warning(f"Stock: {stock_qty}")
+                                else:
+                                    st.error("Rupture")
+                            else:
+                                st.info("Non sync.")
         
 with tab3:
     st.header("☀️ Conseiller solaire")
     
-    api_ready = ('DEEPSEEK_API_KEY' in st.secrets) and bool(st.secrets.get('DEEPSEEK_API_KEY', ''))
-    if not api_ready:
-        st.warning("⚠️ Clé API DeepSeek manquante. Ajoutez-la au fichier '.streamlit/secrets.toml' sous 'DEEPSEEK_API_KEY'.")
-        st.info("👉 La configuration se fait uniquement via le fichier de secrets.")
-    else:
+    api_key = st.secrets.get('DEEPSEEK_API_KEY', '') or st.session_state.get('api_key', '')
+    if not api_key:
+        st.warning("⚠️ Clé API DeepSeek manquante.")
+        st.info("👉 Ajoutez-la dans '.streamlit/secrets.toml' ou collez-la ci-dessous.")
+        st.text_input("🔑 Clé API DeepSeek", type="password", placeholder="sk-...", key="api_key")
+        if st.session_state.get('api_key'):
+            st.success("✅ Clé API enregistrée pour cette session.")
+    # Continuer même sans clé pour afficher l'interface; les réponses indiqueront qu'une clé est requise.
         # Contexte du dimensionnement
         contexte = ""
         if 'dimensionnement' in st.session_state:
@@ -3250,17 +3577,36 @@ L'utilisateur a dimensionné une installation avec:
 - Climat: Sénégal (chaleur, humidité, 5h ensoleillement moyen)
 """
         
-        st.subheader("🎛️ Options d'équipements avec totaux")
+        # Vérification des permissions pour la section Options d'équipements
+        user_role = st.session_state.get('user_role')
+        is_authenticated = is_user_authenticated()
+        has_equipment_access = (is_authenticated and 
+                               (user_role in ['admin', 'technicien'] or is_admin_user()))
         
-        # Récupération du taux accessoires depuis les paramètres admin (extrait valeur numérique)
-        options_accessoires_data = get_accessories_rate()
-        if isinstance(options_accessoires_data, dict):
-            options_accessoires_pct = options_accessoires_data.get('rate')
+        if has_equipment_access:
+            st.subheader("🎛️ Options d'équipements avec totaux")
+            
+            # Récupération du taux accessoires depuis les paramètres admin (extrait valeur numérique)
+            options_accessoires_data = get_accessories_rate()
+            if isinstance(options_accessoires_data, dict):
+                options_accessoires_pct = options_accessoires_data.get('rate')
+            else:
+                options_accessoires_pct = options_accessoires_data
+            if options_accessoires_pct is None:
+                initialize_accessories_rate_in_firebase({'rate': TAUX_ACCESSOIRES_DEFAUT})
+                options_accessoires_pct = TAUX_ACCESSOIRES_DEFAUT
         else:
-            options_accessoires_pct = options_accessoires_data
-        if options_accessoires_pct is None:
-            initialize_accessories_rate_in_firebase({'rate': TAUX_ACCESSOIRES_DEFAUT})
-            options_accessoires_pct = TAUX_ACCESSOIRES_DEFAUT
+            # Message pour les utilisateurs non autorisés
+            st.info("🔒 **Options d'équipements avancées**")
+            st.markdown("""
+            Cette section est réservée aux **techniciens** et **administrateurs** d'Energie Solaire Sénégal.
+            
+            Pour accéder aux options d'équipements détaillées :
+            - **Clients** : Contactez notre équipe technique via l'onglet Contact
+            - **Professionnels** : Connectez-vous avec vos identifiants technicien/admin
+            """)
+            st.caption("ℹ️ Le chat ci-dessous reste disponible pour tous les utilisateurs.")
+            # Ne pas arrêter l'exécution afin d'afficher la section questions/chat
         
         base_voltage = st.session_state.choix['voltage'] if 'choix' in st.session_state else 48
 
@@ -3294,25 +3640,56 @@ L'utilisateur a dimensionné une installation avec:
             # S'assurer que options_accessoires_pct n'est jamais None et convertir en float
             taux_accessoires_final = options_accessoires_pct if options_accessoires_pct is not None else TAUX_ACCESSOIRES_DEFAUT
             devis_opt = calculer_devis(equip_opt, use_online=False, accessoires_rate=float(taux_accessoires_final)/100.0)
-            with st.expander(f"{opt['nom']} – Total: {devis_opt['total']:,} FCFA", expanded=False):
+            with st.expander(f"{opt['nom']} – Aperçu technique", expanded=False):
                 st.markdown(f"• Batterie: {opt['type_batterie']}")
                 
-                # Affichage onduleur avec gestion du couplage
+                # Affichage onduleur amélioré avec débogage
                 onduleur_data = equip_opt['onduleur']
-                if isinstance(onduleur_data, tuple):
-                    onduleur_nom, nb_onduleurs = onduleur_data
-                    if nb_onduleurs > 1:
-                        st.markdown(f"• Onduleur: {nb_onduleurs} x {onduleur_nom} (couplage)")
+                if onduleur_data and onduleur_data != (None, 1):
+                    if isinstance(onduleur_data, tuple):
+                        onduleur_nom, nb_onduleurs = onduleur_data
+                        if onduleur_nom:
+                            if nb_onduleurs > 1:
+                                st.markdown(f"• **Onduleur:** {nb_onduleurs} x {onduleur_nom} (couplage)")
+                                try:
+                                    puissance_unit = get_current_prices()['onduleurs'][onduleur_nom]['puissance']
+                                    st.caption(f"   Puissance totale: {nb_onduleurs * puissance_unit}W")
+                                except:
+                                    pass
+                            else:
+                                st.markdown(f"• **Onduleur:** {onduleur_nom}")
+                                try:
+                                    puissance_unit = get_current_prices()['onduleurs'][onduleur_nom]['puissance']
+                                    st.caption(f"   Puissance: {puissance_unit}W")
+                                except:
+                                    pass
+                        else:
+                            st.markdown(f"• **Onduleur:** ⚠️ Aucun {opt['type_onduleur']} compatible trouvé")
+                            st.caption(f"   Puissance requise: {dim_opt['puissance_onduleur']:.0f}W")
                     else:
-                        st.markdown(f"• Onduleur: {onduleur_nom}")
+                        st.markdown(f"• **Onduleur:** {opt['type_onduleur']} (format ancien)")
                 else:
-                    st.markdown(f"• Onduleur: {opt['type_onduleur']}")
+                    st.markdown(f"• **Onduleur:** ⚠️ Aucun {opt['type_onduleur']} disponible")
+                    st.caption(f"   Puissance requise: {dim_opt['puissance_onduleur']:.0f}W")
                 
                 if equip_opt['regulateur']:
-                    st.markdown(f"• Régulateur: {equip_opt['regulateur']}")
-                st.markdown(f"• Panneaux: {equip_opt['panneau'][1]} x {equip_opt['panneau'][0]}")
+                    st.markdown(f"• **Régulateur:** {equip_opt['regulateur']}")
+                elif opt['type_onduleur'] != 'Hybride':
+                    st.markdown(f"• **Régulateur:** ⚠️ Aucun {opt.get('type_regulateur', 'MPPT')} trouvé")
                 
-                # Autonomie estimée pour cette option
+                panneau_nom, nb_panneaux = equip_opt['panneau']
+                if panneau_nom:
+                    st.markdown(f"• **Panneaux:** {nb_panneaux} x {panneau_nom}")
+                    try:
+                        puissance_totale = nb_panneaux * get_current_prices()['panneaux'][panneau_nom]['puissance']
+                        st.caption(f"   Puissance totale: {puissance_totale}W ({puissance_totale/1000:.1f}kWc)")
+                    except:
+                        pass
+                else:
+                    st.markdown("• **Panneaux:** ⚠️ Aucun panneau trouvé")
+                
+                # Performances estimées avec métriques
+                st.markdown("**📊 Performances:**")
                 try:
                     pn = equip_opt['panneau'][0]
                     nbp = equip_opt['panneau'][1]
@@ -3323,9 +3700,21 @@ L'utilisateur a dimensionné une installation avec:
                     prod_opt_kwh_j = (punit * nbp / 1000.0) * 5.0 * 0.75 if (pn and nbp > 0 and punit > 0) else 0.0
                     conso_tot = st.session_state.consommation if 'consommation' in st.session_state else 10.0
                     auto_opt_pct = min(100.0, (prod_opt_kwh_j / conso_tot) * 100.0) if conso_tot > 0 else 0.0
-                    st.markdown(f"• Autonomie estimée: {auto_opt_pct:.0f}% ({prod_opt_kwh_j:.1f} kWh/j)")
+                    
+                    col_perf1, col_perf2 = st.columns(2)
+                    with col_perf1:
+                        st.metric("Autonomie", f"{auto_opt_pct:.0f}%")
+                    with col_perf2:
+                        st.metric("Production", f"{prod_opt_kwh_j:.1f} kWh/j")
+                    
+                    # Calcul du retour sur investissement
+                    if devis_opt['total'] > 0:
+                        economie_mensuelle_opt = conso_tot * 30 * 125  # 125 FCFA/kWh SENELEC
+                        roi_mois = devis_opt['total'] / economie_mensuelle_opt if economie_mensuelle_opt > 0 else 0
+                        st.caption(f"💰 Retour investissement: {roi_mois/12:.1f} ans")
+                        
                 except Exception:
-                    pass
+                    st.caption("⚠️ Erreur calcul performances")
                 
                 st.markdown("—")
                 for item in devis_opt['details']:
@@ -3342,99 +3731,100 @@ L'utilisateur a dimensionné une installation avec:
                     st.session_state.devis_choisi = devis_opt
                     st.success("Option appliquée. Allez à l’onglet Devis pour exporter.")
 
-        st.markdown("---")
+    st.markdown("---")
 
-        st.subheader("💬 Questions fréquentes")
+    st.subheader("💬 Questions fréquentes")
         
-        col_q1, col_q2, col_q3 = st.columns(3)
-        
-        with col_q1:
-            if st.button("🔧 Entretien des panneaux", use_container_width=True):
-                question = "Comment entretenir mes panneaux solaires au Sénégal avec la poussière et le sable ?"
-                with st.spinner("🤔 Pape répond en streaming..."):
-                    st.markdown("**Question:**")
-                    st.info(question)
-                    st.markdown("**Réponse de l'expert (streaming):**")
-                    st.write_stream(appeler_assistant_ia_stream(question, contexte))
-        
-        with col_q2:
-            if st.button("⚡ Durée de vie", use_container_width=True):
-                question = "Quelle est la durée de vie de mon installation et quand faut-il remplacer les équipements ?"
-                with st.spinner("🤔 Pape répond en streaming..."):
-                    st.markdown("**Question:**")
-                    st.info(question)
-                    st.markdown("**Réponse de Pape (streaming):**")
-                    st.write_stream(appeler_assistant_ia_stream(question, contexte))
-        
-        with col_q3:
-            if st.button("🌧️ Saison des pluies", use_container_width=True):
-                question = "Comment optimiser ma production pendant la saison des pluies au Sénégal ?"
-                with st.spinner("🤔 Pape répond en streaming..."):
-                    st.markdown("**Question:**")
-                    st.info(question)
-                    st.markdown("**Réponse de Pape (streaming):**")
-                    st.write_stream(appeler_assistant_ia_stream(question, contexte))
-        
-        st.markdown("---")
-        
-        col_q4, col_q5, col_q6 = st.columns(3)
-        
-        with col_q4:
-            if st.button("🔋 Batterie Lithium vs AGM", use_container_width=True):
-                question = "Pour le climat du Sénégal, quelle est la meilleure batterie : Lithium ou AGM ? Explique les avantages et inconvénients."
-                with st.spinner("🤔 Pape répond en streaming..."):
-                    st.markdown("**Question:**")
-                    st.info(question)
-                    st.markdown("**Réponse de Pape (streaming):**")
-                    st.write_stream(appeler_assistant_ia_stream(question, contexte))
-        
-        with col_q5:
-            if st.button("🔌 Onduleur hybride", use_container_width=True):
-                question = "Pourquoi choisir un onduleur hybride plutôt qu'un onduleur standard ?"
-                with st.spinner("🤔 Pape répond en streaming..."):
-                    st.markdown("**Question:**")
-                    st.info(question)
-                    st.markdown("**Réponse de Pape (streaming):**")
-                    st.write_stream(appeler_assistant_ia_stream(question, contexte))
-        
-        with col_q6:
-            if st.button("💰 Rentabilité", use_container_width=True):
-                question = "Mon installation est-elle rentable ? Comment calculer le retour sur investissement ?"
-                with st.spinner("🤔 Pape répond en streaming..."):
-                    st.markdown("**Question:**")
-                    st.info(question)
-                    st.markdown("**Réponse de Pape (streaming):**")
-                    st.write_stream(appeler_assistant_ia_stream(question, contexte))
-        
-        st.markdown("---")
-        st.subheader("✍️ Posez votre question personnalisée")
-        
-        # Question personnalisée
-        question_utilisateur = st.text_area(
-            "Votre question sur l'énergie solaire :",
-            placeholder="Ex: Comment protéger mon installation contre la foudre pendant l'hivernage ?",
-            height=100
-        )
-        
-        col_send, col_clear = st.columns([3, 1])
-        
-        with col_send:
-            envoyer_btn = st.button("📤 Envoyer la question", type="primary", use_container_width=True)
-        
-        with col_clear:
-            if st.button("🗑️ Effacer", use_container_width=True):
-                st.rerun()
-        
-        if envoyer_btn:
-            if question_utilisateur and len(question_utilisateur.strip()) > 5:
-                with st.spinner("🤔 Pape répond en streaming..."):
-                    st.markdown("---")
-                    st.markdown("**Votre question:**")
-                    st.info(question_utilisateur)
-                    st.markdown("**Réponse détaillée de Pape (streaming):**")
-                    st.write_stream(appeler_assistant_ia_stream(question_utilisateur, contexte))
-            else:
-                st.warning("⚠️ Veuillez entrer une question (minimum 5 caractères)")
+    col_q1, col_q2, col_q3 = st.columns(3)
+    
+    with col_q1:
+        if st.button("🔧 Entretien des panneaux", use_container_width=True):
+            question = "Comment entretenir mes panneaux solaires au Sénégal avec la poussière et le sable ?"
+            with st.spinner("🤔 Pape répond en streaming..."):
+                st.markdown("**Question:**")
+                st.info(question)
+                st.markdown("**Réponse de l'expert (streaming):**")
+                st.write_stream(appeler_assistant_ia_stream(question, contexte))
+    
+    with col_q2:
+        if st.button("⚡ Durée de vie", use_container_width=True):
+            question = "Quelle est la durée de vie de mon installation et quand faut-il remplacer les équipements ?"
+            with st.spinner("🤔 Pape répond en streaming..."):
+                st.markdown("**Question:**")
+                st.info(question)
+                st.markdown("**Réponse de Pape (streaming):**")
+                st.write_stream(appeler_assistant_ia_stream(question, contexte))
+    
+    with col_q3:
+        if st.button("🌧️ Saison des pluies", use_container_width=True):
+            question = "Comment optimiser ma production pendant la saison des pluies au Sénégal ?"
+            with st.spinner("🤔 Pape répond en streaming..."):
+                st.markdown("**Question:**")
+                st.info(question)
+                st.markdown("**Réponse de Pape (streaming):**")
+                st.write_stream(appeler_assistant_ia_stream(question, contexte))
+    
+    st.markdown("---")
+    
+    col_q4, col_q5, col_q6 = st.columns(3)
+    
+    with col_q4:
+        if st.button("🔋 Batterie Lithium vs AGM", use_container_width=True):
+            question = "Pour le climat du Sénégal, quelle est la meilleure batterie : Lithium ou AGM ? Explique les avantages et inconvénients."
+            with st.spinner("🤔 Pape répond en streaming..."):
+                st.markdown("**Question:**")
+                st.info(question)
+                st.markdown("**Réponse de Pape (streaming):**")
+                st.write_stream(appeler_assistant_ia_stream(question, contexte))
+    
+    with col_q5:
+        if st.button("🔌 Onduleur hybride", use_container_width=True):
+            question = "Pourquoi choisir un onduleur hybride plutôt qu'un onduleur standard ?"
+            with st.spinner("🤔 Pape répond en streaming..."):
+                st.markdown("**Question:**")
+                st.info(question)
+                st.markdown("**Réponse de Pape (streaming):**")
+                st.write_stream(appeler_assistant_ia_stream(question, contexte))
+    
+    with col_q6:
+        if st.button("💰 Rentabilité", use_container_width=True):
+            question = "Mon installation est-elle rentable ? Comment calculer le retour sur investissement ?"
+            with st.spinner("🤔 Pape répond en streaming..."):
+                st.markdown("**Question:**")
+                st.info(question)
+                st.markdown("**Réponse de Pape (streaming):**")
+                st.write_stream(appeler_assistant_ia_stream(question, contexte))
+    
+    st.markdown("---")
+    
+    st.subheader("✍️ Posez votre question personnalisée")
+    
+    # Question personnalisée
+    question_utilisateur = st.text_area(
+        "Votre question sur l'énergie solaire :",
+        placeholder="Ex: Comment protéger mon installation contre la foudre pendant l'hivernage ?",
+        height=100
+    )
+    
+    col_send, col_clear = st.columns([3, 1])
+    
+    with col_send:
+        envoyer_btn = st.button("📤 Envoyer la question", type="primary", use_container_width=True)
+    
+    with col_clear:
+        if st.button("🗑️ Effacer", use_container_width=True):
+            st.rerun()
+    
+    if envoyer_btn:
+        if question_utilisateur and len(question_utilisateur.strip()) > 5:
+            with st.spinner("🤔 Pape répond en streaming..."):
+                st.markdown("---")
+                st.markdown("**Votre question:**")
+                st.info(question_utilisateur)
+                st.markdown("**Réponse détaillée de Pape (streaming):**")
+                st.write_stream(appeler_assistant_ia_stream(question_utilisateur, contexte))
+        else:
+            st.warning("⚠️ Veuillez entrer une question (minimum 5 caractères)")
 
 # Onglet Contact
 with tab_contact:
@@ -3621,7 +4011,110 @@ if is_user_authenticated() and is_admin_user():
         st.header("⚙️ Panneau d'Administration")
         
         # Sous-onglets admin
-        admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5, admin_tab6, admin_tab7 = st.tabs(["💰 Gestion des Prix", "🔧 Main d'œuvre", "📋 Devis Clients", "📞 Demandes Clients", "🕘 Historique", "🧮 Calculateur", "📦 Gestion de Stock"])
+        admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5, admin_tab6, admin_tab7, admin_tab8 = st.tabs(["💰 Gestion des Prix", "🔧 Main d'œuvre", "📋 Devis Clients", "📞 Demandes Clients", "🕘 Historique", "🧮 Calculateur", "📦 Gestion de Stock", "👥 Utilisateurs"])
+
+        with admin_tab8:
+            st.header("👥 Gestion des Utilisateurs")
+            st.caption("Créer des comptes, gérer les rôles et l’accès.")
+
+            with st.expander("Créer un utilisateur", expanded=False):
+                with st.form("create_user_form"):
+                    new_email = st.text_input("Email utilisateur")
+                    new_password = st.text_input("Mot de passe", type="password", help="Minimum 6 caractères")
+                    roles_map = {
+                        "Administrateur": "admin",
+                        "Technicien": "technicien",
+                        "Client": "client",
+                    }
+                    role_labels = list(roles_map.keys())
+                    new_role_label = st.selectbox("Rôle", role_labels, index=role_labels.index("Client"))
+                    display_name = st.text_input("Nom (optionnel)")
+                    create_btn = st.form_submit_button("Créer")
+                    if create_btn:
+                        if not new_email:
+                            st.warning("Veuillez saisir un email.")
+                        elif not new_password:
+                            st.warning("Veuillez saisir un mot de passe.")
+                        elif len(new_password) < 6:
+                            st.warning("Le mot de passe doit contenir au moins 6 caractères.")
+                        else:
+                            try:
+                                _ = create_app_user(new_email, new_password, display_name if display_name else None, roles_map[new_role_label])
+                                clear_users_cache()
+                                st.success(f"Utilisateur créé: {new_email} • Rôle: {new_role_label}")
+                                st.info("L'utilisateur peut maintenant se connecter avec ses identifiants.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erreur création utilisateur: {e}")
+
+            st.subheader("Liste des utilisateurs")
+            try:
+                users = get_all_users_with_roles()
+            except Exception as e:
+                users = []
+                st.error(f"Erreur de récupération des utilisateurs: {e}")
+
+            if users:
+                for u in users:
+                    email = u.get("email")
+                    role = u.get("role", "user")
+                    disabled = u.get("disabled", False)
+                    col1, col2, col3, col4, col5 = st.columns([3, 2, 2, 2, 2])
+                    with col1:
+                        st.write(f"📧 {email}")
+                        st.write(f"Statut: {'Désactivé' if disabled else 'Actif'}")
+                    with col2:
+                        roles_map = {
+                            "Administrateur": "admin",
+                            "Technicien": "technicien",
+                            "Client": "client",
+                        }
+                        role_labels = list(roles_map.keys())
+                        value_to_label = {v: k for k, v in roles_map.items()}
+                        default_label = value_to_label.get(role, "Client")
+                        selected_label = st.selectbox("Rôle", role_labels, index=role_labels.index(default_label), key=f"role_sel_{email}")
+                    with col3:
+                        if st.button("Mettre à jour rôle", key=f"btn_role_{email}"):
+                            try:
+                                set_user_role(email, roles_map[selected_label])
+                                clear_users_cache()
+                                st.success("Rôle mis à jour.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erreur mise à jour rôle: {e}")
+                    with col4:
+                        toggle_label = "Désactiver" if not disabled else "Activer"
+                        if st.button(toggle_label, key=f"btn_toggle_{email}"):
+                            try:
+                                disable_app_user(email, not disabled)
+                                clear_users_cache()
+                                st.success(f"Utilisateur {'désactivé' if not disabled else 'activé'}.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erreur changement statut: {e}")
+                    with col5:
+                        if st.button("Supprimer", key=f"btn_delete_{email}"):
+                            try:
+                                delete_app_user(email)
+                                clear_users_cache()
+                                st.success("Utilisateur supprimé.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erreur suppression: {e}")
+
+                st.markdown("—")
+                selected_email = st.selectbox("Sélection pour réinitialisation mot de passe", [u.get("email") for u in users], key="reset_sel")
+                if st.button("Obtenir lien de réinitialisation", key="btn_reset_link"):
+                    try:
+                        link = get_password_reset_link(selected_email)
+                        if link:
+                            st.info(f"Lien: {link}")
+                        else:
+                            st.warning("Lien non disponible.")
+                    except Exception as e:
+                        st.error(f"Erreur génération lien: {e}")
+            else:
+                st.info("Aucun utilisateur trouvé.")
         
         # Historique des modifications
         with admin_tab5:
@@ -5455,7 +5948,7 @@ if is_user_authenticated() and is_admin_user():
             st.caption("Gérez vos produits, clients, factures et mouvements de stock avec synchronisation Firebase.")
             
             # Sous-onglets pour la gestion de stock
-            stock_tab1, stock_tab2, stock_tab3, stock_tab4, stock_tab5 = st.tabs(["📊 Tableau de Bord", "📦 Produits", "👥 Clients", "📄 Factures", "📈 Mouvements"])
+            stock_tab1, stock_tab2, stock_tab3, stock_tab4, stock_tab5, stock_tab6 = st.tabs(["📊 Tableau de Bord", "📦 Produits", "👥 Clients", "📄 Factures", "📈 Mouvements", "🤖 Matar"])
             
             # Tableau de Bord Stock
             with stock_tab1:
@@ -6268,6 +6761,10 @@ if is_user_authenticated() and is_admin_user():
                             st.info("Aucun produit disponible. Ajoutez d'abord des produits.")
                     except Exception as e:
                         st.error(f"❌ Erreur: {e}")
+            
+            # Onglet Matar IA
+            with stock_tab6:
+                matar_ai.display_chat_interface()
 
 st.markdown("---")
 
