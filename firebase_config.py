@@ -599,7 +599,304 @@ def get_change_history(limit: int = 100, event_type: str | None = None, user_ema
                 items.sort(key=lambda x: x.get('timestamp'), reverse=True)
             except Exception:
                 pass
-            return items
+            return []
     except Exception as e:
         st.error(f"Erreur get_change_history: {e}")
         return []
+
+
+# --- Fonctions de gestion de stock ---
+
+def save_product_to_firebase(product_data):
+    """Sauvegarde un produit dans Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            # Ajouter timestamp de création
+            product_data['created_at'] = firestore.SERVER_TIMESTAMP
+            product_data['updated_at'] = firestore.SERVER_TIMESTAMP
+            
+            doc_ref = db.collection('stock_products').add(product_data)
+            new_id = None
+            try:
+                new_id = doc_ref[1].id
+            except Exception:
+                pass
+            
+            # Journaliser la création
+            try:
+                log_change(
+                    event_type='stock.product.create',
+                    item_id=new_id,
+                    description=f'Création du produit: {product_data.get("nom", "Inconnu")}',
+                    before=None,
+                    after={**product_data, 'id': new_id} if isinstance(product_data, dict) else product_data,
+                    metadata={'collection': 'stock_products'}
+                )
+            except Exception:
+                pass
+            return new_id
+    except Exception as e:
+        st.error(f"Erreur sauvegarde produit: {e}")
+        return None
+
+@st.cache_data(ttl=300)  # Cache pendant 5 minutes
+def get_all_products_from_firebase():
+    """Récupère tous les produits depuis Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            products = db.collection('stock_products').stream()
+            return [{'id': doc.id, **doc.to_dict()} for doc in products]
+    except Exception as e:
+        st.error(f"Erreur récupération produits: {e}")
+        return []
+
+def update_product_in_firebase(product_id, product_data):
+    """Met à jour un produit dans Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            doc_ref = db.collection('stock_products').document(product_id)
+            
+            # Récupérer l'état avant modification
+            try:
+                snap_before = doc_ref.get()
+                before_doc = snap_before.to_dict() if snap_before.exists else None
+            except Exception:
+                before_doc = None
+            
+            # Ajouter timestamp de mise à jour
+            product_data['updated_at'] = firestore.SERVER_TIMESTAMP
+            doc_ref.update(product_data)
+            
+            # Journaliser la modification
+            try:
+                log_change(
+                    event_type='stock.product.update',
+                    item_id=product_id,
+                    description=f'Mise à jour du produit: {product_data.get("nom", "Inconnu")}',
+                    before=before_doc,
+                    after=product_data,
+                    metadata={'collection': 'stock_products'}
+                )
+            except Exception:
+                pass
+            return True
+    except Exception as e:
+        st.error(f"Erreur mise à jour produit: {e}")
+        return False
+
+def save_client_to_firebase(client_data):
+    """Sauvegarde un client dans Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            # Ajouter timestamp de création
+            client_data['created_at'] = firestore.SERVER_TIMESTAMP
+            client_data['updated_at'] = firestore.SERVER_TIMESTAMP
+            
+            doc_ref = db.collection('stock_clients').add(client_data)
+            new_id = None
+            try:
+                new_id = doc_ref[1].id
+            except Exception:
+                pass
+            
+            # Journaliser la création
+            try:
+                log_change(
+                    event_type='stock.client.create',
+                    item_id=new_id,
+                    description=f'Création du client: {client_data.get("nom", "Inconnu")}',
+                    before=None,
+                    after={**client_data, 'id': new_id} if isinstance(client_data, dict) else client_data,
+                    metadata={'collection': 'stock_clients'}
+                )
+            except Exception:
+                pass
+            return new_id
+    except Exception as e:
+        st.error(f"Erreur sauvegarde client: {e}")
+        return None
+
+@st.cache_data(ttl=300)  # Cache pendant 5 minutes
+def get_all_clients_from_firebase():
+    """Récupère tous les clients depuis Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            clients = db.collection('stock_clients').stream()
+            return [{'id': doc.id, **doc.to_dict()} for doc in clients]
+    except Exception as e:
+        st.error(f"Erreur récupération clients: {e}")
+        return []
+
+def save_invoice_to_firebase(invoice_data):
+    """Sauvegarde une facture dans Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            # Ajouter timestamp de création
+            invoice_data['created_at'] = firestore.SERVER_TIMESTAMP
+            invoice_data['updated_at'] = firestore.SERVER_TIMESTAMP
+            
+            doc_ref = db.collection('stock_invoices').add(invoice_data)
+            new_id = None
+            try:
+                new_id = doc_ref[1].id
+            except Exception:
+                pass
+            
+            # Journaliser la création
+            try:
+                log_change(
+                    event_type='stock.invoice.create',
+                    item_id=new_id,
+                    description=f'Création de la facture: {invoice_data.get("numero", "Inconnu")}',
+                    before=None,
+                    after={**invoice_data, 'id': new_id} if isinstance(invoice_data, dict) else invoice_data,
+                    metadata={'collection': 'stock_invoices'}
+                )
+            except Exception:
+                pass
+            return new_id
+    except Exception as e:
+        st.error(f"Erreur sauvegarde facture: {e}")
+        return None
+
+@st.cache_data(ttl=300)  # Cache pendant 5 minutes
+def get_all_invoices_from_firebase():
+    """Récupère toutes les factures depuis Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            invoices = db.collection('stock_invoices').order_by('created_at', direction=firestore.Query.DESCENDING).stream()
+            return [{'id': doc.id, **doc.to_dict()} for doc in invoices]
+    except Exception as e:
+        st.error(f"Erreur récupération factures: {e}")
+        return []
+
+def save_stock_movement_to_firebase(movement_data):
+    """Sauvegarde un mouvement de stock dans Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            # Ajouter timestamp de création
+            movement_data['created_at'] = firestore.SERVER_TIMESTAMP
+            
+            doc_ref = db.collection('stock_movements').add(movement_data)
+            new_id = None
+            try:
+                new_id = doc_ref[1].id
+            except Exception:
+                pass
+            
+            # Journaliser le mouvement
+            try:
+                log_change(
+                    event_type='stock.movement.create',
+                    item_id=new_id,
+                    description=f'Mouvement de stock: {movement_data.get("type", "Inconnu")} - {movement_data.get("produit_nom", "Inconnu")}',
+                    before=None,
+                    after={**movement_data, 'id': new_id} if isinstance(movement_data, dict) else movement_data,
+                    metadata={'collection': 'stock_movements'}
+                )
+            except Exception:
+                pass
+            return new_id
+    except Exception as e:
+        st.error(f"Erreur sauvegarde mouvement: {e}")
+        return None
+
+@st.cache_data(ttl=300)  # Cache pendant 5 minutes
+def get_stock_movements_from_firebase(limit=100):
+    """Récupère les mouvements de stock depuis Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            movements = db.collection('stock_movements').order_by('created_at', direction=firestore.Query.DESCENDING).limit(limit).stream()
+            return [{'id': doc.id, **doc.to_dict()} for doc in movements]
+    except Exception as e:
+        st.error(f"Erreur récupération mouvements: {e}")
+        return []
+
+def clear_stock_cache():
+    """Vide le cache des données de stock pour forcer le rechargement"""
+    get_all_products_from_firebase.clear()
+    get_all_clients_from_firebase.clear()
+    get_all_invoices_from_firebase.clear()
+    get_stock_movements_from_firebase.clear()
+
+def sync_sqlite_to_firebase():
+    """Synchronise les données SQLite vers Firebase"""
+    import sqlite3
+    import pandas as pd
+    from datetime import datetime
+    
+    try:
+        # Connexion à la base SQLite
+        conn = sqlite3.connect('energie_solaire.db')
+        
+        # Synchroniser les produits
+        produits_df = pd.read_sql_query("SELECT * FROM produits", conn)
+        for _, produit in produits_df.iterrows():
+            product_data = {
+                'nom': produit['nom'],
+                'categorie': produit['categorie'],
+                'prix_achat': float(produit['prix_achat']) if produit['prix_achat'] else 0,
+                'prix_vente': float(produit['prix_vente']) if produit['prix_vente'] else 0,
+                'stock_actuel': int(produit['stock_actuel']) if produit['stock_actuel'] else 0,
+                'stock_min': int(produit['stock_min']) if produit['stock_min'] else 0,
+                'unite': produit['unite'],
+                'sqlite_id': int(produit['id'])
+            }
+            save_product_to_firebase(product_data)
+        
+        # Synchroniser les clients
+        clients_df = pd.read_sql_query("SELECT * FROM clients", conn)
+        for _, client in clients_df.iterrows():
+            client_data = {
+                'nom': client['nom'],
+                'telephone': client['telephone'] or '',
+                'adresse': client['adresse'] or '',
+                'email': client['email'] or '',
+                'sqlite_id': int(client['id'])
+            }
+            save_client_to_firebase(client_data)
+        
+        # Synchroniser les factures
+        factures_df = pd.read_sql_query("SELECT * FROM factures", conn)
+        for _, facture in factures_df.iterrows():
+            invoice_data = {
+                'numero': facture['numero'],
+                'date': facture['date'],
+                'client_id': int(facture['client_id']) if facture['client_id'] else None,
+                'client_nom': facture['client_nom'],
+                'montant_total': float(facture['montant_total']) if facture['montant_total'] else 0,
+                'type': facture['type'],
+                'statut': facture['statut'],
+                'sqlite_id': int(facture['id'])
+            }
+            save_invoice_to_firebase(invoice_data)
+        
+        # Synchroniser les mouvements de stock
+        mouvements_df = pd.read_sql_query("SELECT * FROM mouvements_stock", conn)
+        for _, mouvement in mouvements_df.iterrows():
+            movement_data = {
+                'date': mouvement['date'],
+                'produit_id': int(mouvement['produit_id']) if mouvement['produit_id'] else None,
+                'produit_nom': mouvement['produit_nom'],
+                'type': mouvement['type'],
+                'quantite': int(mouvement['quantite']) if mouvement['quantite'] else 0,
+                'reference': mouvement['reference'] or '',
+                'sqlite_id': int(mouvement['id'])
+            }
+            save_stock_movement_to_firebase(movement_data)
+        
+        conn.close()
+        clear_stock_cache()  # Vider le cache après synchronisation
+        return True, "Synchronisation réussie"
+        
+    except Exception as e:
+        return False, f"Erreur de synchronisation: {e}"
