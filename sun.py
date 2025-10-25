@@ -32,7 +32,7 @@ from firebase_config import (
 )
 
 # Import des nouveaux modules
-from sync_products import sync_dimensioning_to_stock, get_stock_for_dimensioning_product, check_stock_availability, update_stock_after_quote
+from sync_products import get_stock_for_dimensioning_product, check_stock_availability, update_stock_after_quote
 from invoice_editor import show_invoice_editor
 from stock_ui_improvements import create_modern_metric_card, create_stock_alert_card, create_advanced_stock_chart, create_financial_overview, create_interactive_product_table, show_stock_alerts_sidebar
 
@@ -83,6 +83,73 @@ def get_current_prices():
 def clear_prices_cache():
     """Vide le cache des prix pour forcer le rechargement"""
     get_current_prices.clear()
+
+# --- Synchronisation croisée Stock ↔ Dimensionnement ---
+STOCK_TO_DIM_CATEGORY = {
+    "Panneaux Solaires": "panneaux",
+    "Batteries": "batteries",
+    "Onduleurs": "onduleurs",
+    "Régulateurs": "regulateurs",
+    "Regulateurs": "regulateurs",
+}
+
+def delete_dimensionnement_article_if_exists(article_name: str, stock_category: str | None = None) -> bool:
+    """
+    Supprime l'article du module 'dimensionnement' s'il existe, 
+    en se basant sur le nom et, si fourni, la catégorie stock.
+    Retourne True si une suppression a été effectuée.
+    """
+    try:
+        if not article_name:
+            return False
+        prices = get_current_prices()
+        if not isinstance(prices, dict):
+            return False
+
+        # Déterminer les catégories à parcourir
+        if stock_category and stock_category in STOCK_TO_DIM_CATEGORY:
+            search_categories = [STOCK_TO_DIM_CATEGORY[stock_category]]
+        else:
+            search_categories = ["panneaux", "batteries", "onduleurs", "regulateurs"]
+
+        updated = prices.copy()
+        removed = False
+        for cat in search_categories:
+            cat_items = updated.get(cat, {})
+            if isinstance(cat_items, dict) and article_name in cat_items:
+                del updated[cat][article_name]
+                removed = True
+                break
+
+        if removed:
+            if save_equipment_prices(updated):
+                clear_prices_cache()
+                st.cache_data.clear()
+                return True
+        return False
+    except Exception:
+        return False
+
+def delete_stock_product_by_name_if_exists(product_name: str) -> bool:
+    """
+    Supprime le produit correspondant dans le stock (Firebase) en se basant sur le nom exact.
+    Retourne True si une suppression a été effectuée.
+    """
+    try:
+        if not product_name:
+            return False
+        products = get_all_products_from_firebase()
+        if not isinstance(products, dict):
+            return False
+        for prod_id, prod in products.items():
+            if prod.get('nom') == product_name:
+                if delete_product_from_firebase(prod_id):
+                    clear_stock_cache()
+                    return True
+                return False
+        return False
+    except Exception:
+        return False
 
 # Configuration de la page définie au début du script (bloc déplacé) 
 
@@ -3091,11 +3158,7 @@ Pour plus d'informations : energiesolairesenegal.com
             col_action1, col_action2, col_action3 = st.columns(3)
             
             with col_action1:
-                if st.button("🔄 Actualiser le stock", use_container_width=True):
-                    # Synchroniser les produits du dimensionnement vers le stock
-                    sync_dimensioning_to_stock()
-                    st.success("✅ Stock synchronisé avec les produits du dimensionnement")
-                    st.rerun()
+                pass  # Synchronisation dimensionnement → stock retirée
             
             with col_action2:
                 if st.button("📋 Créer devis/facture", use_container_width=True):
@@ -3864,14 +3927,12 @@ if is_user_authenticated() and is_admin_user():
                                         st.error("❌ Erreur lors de la sauvegarde")
                             
                             if delete_button:
-                                # Supprimer l'article de la structure complète
                                 updated_prices = current_prices.copy()
                                 del updated_prices[selected_category][selected_article]
-                                
-                                # Sauvegarder dans Firebase
                                 if save_equipment_prices(updated_prices):
+                                    # Suppression croisée: retirer aussi le produit du stock si présent
+                                    delete_stock_product_by_name_if_exists(selected_article)
                                     st.success(f"✅ Article '{selected_article}' supprimé avec succès!")
-                                    # Vider le cache spécifique des prix
                                     clear_prices_cache()
                                     st.cache_data.clear()
                                     st.rerun()
@@ -3897,14 +3958,13 @@ if is_user_authenticated() and is_admin_user():
                         
                         with col1:
                             if st.button(f"🗑️ Supprimer '{equipement_a_supprimer}'", key=f"delete_btn_{selected_category}"):
-                                # Supprimer l'article
                                 updated_prices = current_prices.copy()
                                 if selected_category in updated_prices and equipement_a_supprimer in updated_prices[selected_category]:
                                     del updated_prices[selected_category][equipement_a_supprimer]
-                                    
                                     if save_equipment_prices(updated_prices):
+                                        # Suppression croisée: retirer aussi le produit du stock si présent
+                                        delete_stock_product_by_name_if_exists(equipement_a_supprimer)
                                         st.success(f"✅ Article '{equipement_a_supprimer}' supprimé avec succès!")
-                                        # Vider le cache spécifique des prix
                                         clear_prices_cache()
                                         st.cache_data.clear()
                                         st.rerun()
@@ -5414,8 +5474,8 @@ if is_user_authenticated() and is_admin_user():
                                 'categorie': product.get('categorie', ''),
                                 'prix_achat': product.get('prix_achat', 0),
                                 'prix_vente': product.get('prix_vente', 0),
-                                'quantite': product.get('quantite', 0),
-                                'stock_min': product.get('stock_min', 0),
+                                'quantite': product.get('stock_actuel', product.get('quantite', 0)),
+                                'stock_min': product.get('stock_minimum', product.get('stock_min', 0)),
                                 'unite': product.get('unite', 'pièce')
                             })
                         df_products = pd.DataFrame(products_list)
@@ -5425,105 +5485,9 @@ if is_user_authenticated() and is_admin_user():
                 except Exception as e:
                     st.error(f"Erreur lors du chargement des données financières: {e}")
                 
-                st.markdown("---")
-                
-                # Synchronisation bidirectionnelle
-                st.subheader("🔄 Synchronisation Dimensionnement ↔ Stock")
-                
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    if st.button("📥 Importer produits du dimensionnement", help="Synchronise les produits PRIX_EQUIPEMENTS vers le stock"):
-                        with st.spinner("Synchronisation en cours..."):
-                            try:
-                                result = sync_dimensioning_to_stock()
-                                if result["success"]:
-                                    st.success(f"✅ Synchronisation réussie!")
-                                    st.info(f"• {result['new_products']} nouveaux produits ajoutés")
-                                    st.info(f"• {result['updated_products']} produits mis à jour")
-                                    st.info(f"• {result['total_products']} produits traités au total")
-                                    clear_stock_cache()
-                                else:
-                                    st.error(f"❌ Erreur: {result.get('error', 'Erreur inconnue')}")
-                            except Exception as e:
-                                st.error(f"❌ Erreur lors de la synchronisation: {e}")
-                
-                with col2:
-                    if st.button("📊 Vérifier cohérence", help="Vérifie la cohérence entre dimensionnement et stock"):
-                        with st.spinner("Vérification en cours..."):
-                            try:
-                                from sync_products import extract_products_from_dimensioning
-                                dimensioning_products = extract_products_from_dimensioning()
-                                stock_products = get_all_products_from_firebase()
-                                
-                                dim_names = {p["nom"] for p in dimensioning_products}
-                                stock_names = {p.get("nom", "") for p in stock_products.values()} if stock_products else set()
-                                
-                                missing_in_stock = dim_names - stock_names
-                                only_in_stock = stock_names - dim_names
-                                
-                                st.info(f"📊 Produits dans dimensionnement: {len(dim_names)}")
-                                st.info(f"📦 Produits dans stock: {len(stock_names)}")
-                                
-                                if missing_in_stock:
-                                    st.warning(f"⚠️ {len(missing_in_stock)} produits manquants dans le stock")
-                                    with st.expander("Voir les produits manquants"):
-                                        for product in missing_in_stock:
-                                            st.write(f"• {product}")
-                                
-                                if only_in_stock:
-                                    st.info(f"ℹ️ {len(only_in_stock)} produits uniquement dans le stock")
-                                
-                                if not missing_in_stock and not only_in_stock:
-                                    st.success("✅ Parfaite cohérence entre dimensionnement et stock!")
-                                    
-                            except Exception as e:
-                                st.error(f"❌ Erreur lors de la vérification: {e}")
-                
-                with col3:
-                    if st.button("🔄 Synchronisation complète", help="Synchronise dans les deux sens"):
-                        with st.spinner("Synchronisation complète en cours..."):
-                            try:
-                                # D'abord synchroniser dimensionnement vers stock
-                                result = sync_dimensioning_to_stock()
-                                if result["success"]:
-                                    # Puis synchroniser SQLite vers Firebase
-                                    sync_success = sync_sqlite_to_firebase()
-                                    if sync_success:
-                                        clear_stock_cache()
-                                        st.success("✅ Synchronisation complète réussie!")
-                                        st.info(f"• {result['new_products']} nouveaux produits")
-                                        st.info(f"• {result['updated_products']} produits mis à jour")
-                                    else:
-                                        st.warning("⚠️ Synchronisation partielle - Erreur SQLite→Firebase")
-                                else:
-                                    st.error(f"❌ Erreur: {result.get('error', 'Erreur inconnue')}")
-                            except Exception as e:
-                                st.error(f"❌ Erreur lors de la synchronisation: {e}")
-                
-                st.markdown("---")
-                
-                # Actions rapides
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if st.button("🔄 Synchroniser SQLite → Firebase", help="Synchronise les données locales vers Firebase"):
-                        with st.spinner("Synchronisation en cours..."):
-                            try:
-                                success = sync_sqlite_to_firebase()
-                                if success:
-                                    st.success("✅ Synchronisation réussie!")
-                                    clear_stock_cache()
-                                else:
-                                    st.error("❌ Erreur lors de la synchronisation")
-                            except Exception as e:
-                                st.error(f"❌ Erreur: {e}")
-                
-                with col2:
-                    if st.button("🗑️ Vider le cache stock", help="Force le rechargement des données depuis Firebase"):
-                        clear_stock_cache()
-                        st.success("✅ Cache vidé!")
-                
+                # Section de synchronisation retirée selon demande utilisateur
+                # (Import dimensionnement → stock, cohérence, synchronisation complète, actions rapides)
+                # La gestion des graphiques et alertes stock reste disponible ci-dessous.
                 st.markdown("---")
                 
                 # Graphiques avancés de stock
@@ -5538,8 +5502,8 @@ if is_user_authenticated() and is_admin_user():
                                 'categorie': product.get('categorie', ''),
                                 'prix_achat': product.get('prix_achat', 0),
                                 'prix_vente': product.get('prix_vente', 0),
-                                'quantite': product.get('quantite', 0),
-                                'stock_min': product.get('stock_min', 0),
+                                'quantite': product.get('stock_actuel', product.get('quantite', 0)),
+                                'stock_min': product.get('stock_minimum', product.get('stock_min', 0)),
                                 'unite': product.get('unite', 'pièce')
                             })
                         df_products = pd.DataFrame(products_list)
@@ -5592,8 +5556,8 @@ if is_user_authenticated() and is_admin_user():
                                 'categorie': product.get('categorie', ''),
                                 'prix_achat': product.get('prix_achat', 0),
                                 'prix_vente': product.get('prix_vente', 0),
-                                'quantite': product.get('quantite', 0),
-                                'stock_min': product.get('stock_min', 0),
+                                'quantite': product.get('stock_actuel', product.get('quantite', 0)),
+                                'stock_min': product.get('stock_minimum', product.get('stock_min', 0)),
                                 'unite': product.get('unite', 'pièce')
                             })
                         df_products = pd.DataFrame(products_list)
@@ -5616,14 +5580,87 @@ if is_user_authenticated() and is_admin_user():
                                 "Panneaux Solaires", "Batteries", "Onduleurs", 
                                 "Régulateurs", "Accessoires", "Câbles", "Autres"
                             ])
-                            prix_achat = st.number_input("Prix d'achat (FCFA)", min_value=0, step=1000)
-                            prix_vente = st.number_input("Prix de vente (FCFA)", min_value=0, step=1000)
+                            prix_achat = st.number_input("Prix d'achat (FCFA)", min_value=0, value=0, step=1000)
+                            prix_vente = st.number_input("Prix de vente (FCFA)", min_value=0, value=0, step=1000)
                         
                         with col2:
-                            stock_initial = st.number_input("Stock initial", min_value=0, step=1)
-                            stock_minimum = st.number_input("Stock minimum", min_value=0, step=1)
+                            stock_initial = st.number_input("Stock initial", min_value=0, value=0, step=1)
+                            stock_minimum = st.number_input("Stock minimum", min_value=0, value=5, step=1)
                             unite = st.selectbox("Unité", ["pièce", "mètre", "kg", "litre", "lot"])
                             description = st.text_area("Description (optionnel)", height=100)
+                        
+                        # Caractéristiques techniques par catégorie
+                        specifications = {}
+                        if categorie == "Panneaux Solaires":
+                            st.subheader("Caractéristiques techniques du panneau")
+                            spec_col1, spec_col2, spec_col3 = st.columns(3)
+                            with spec_col1:
+                                puissance_w = st.number_input("Puissance (W)", min_value=0, value=0, step=10, help="Puissance nominale en watts")
+                                voltage_v = st.number_input("Voltage (V)", min_value=0, value=0, step=1)
+                            with spec_col2:
+                                type_panneau = st.selectbox("Type", ["Monocristallin", "Polycristallin", "PERC", "Thin-film"], index=0)
+                                courant_a = st.number_input("Courant (A)", min_value=0.0, value=0.0, step=0.1)
+                            with spec_col3:
+                                dimensions = st.text_input("Dimensions (mm)", value="")
+                            specifications = {
+                                "puissance": puissance_w,
+                                "voltage": voltage_v,
+                                "type": type_panneau,
+                                "courant": courant_a,
+                                "dimensions": dimensions,
+                            }
+                        elif categorie == "Batteries":
+                            st.subheader("Caractéristiques techniques de la batterie")
+                            spec_col1, spec_col2, spec_col3 = st.columns(3)
+                            with spec_col1:
+                                capacite_ah = st.number_input("Capacité (Ah)", min_value=0, value=0, step=10)
+                                voltage_v = st.number_input("Voltage (V)", min_value=0, value=12, step=1)
+                            with spec_col2:
+                                cycles = st.number_input("Cycles", min_value=0, value=0, step=100)
+                                decharge_max = st.number_input("Décharge max (%)", min_value=0, max_value=100, value=50, step=1)
+                            with spec_col3:
+                                type_batterie = st.selectbox("Type", ["Gel", "AGM", "Lithium", "Plomb"], index=0)
+                            specifications = {
+                                "capacite": capacite_ah,
+                                "voltage": voltage_v,
+                                "cycles": cycles,
+                                "decharge_max": decharge_max,
+                                "type": type_batterie,
+                            }
+                        elif categorie == "Onduleurs":
+                            st.subheader("Caractéristiques techniques de l'onduleur")
+                            spec_col1, spec_col2, spec_col3 = st.columns(3)
+                            with spec_col1:
+                                puissance_w = st.number_input("Puissance (W)", min_value=0, value=0, step=100)
+                                voltage_v = st.number_input("Voltage (V)", min_value=0, value=220, step=10)
+                            with spec_col2:
+                                phase = st.selectbox("Phase", ["Monophasé", "Triphasé"], index=0)
+                                mppt = st.checkbox("MPPT")
+                            with spec_col3:
+                                efficacite = st.number_input("Efficacité (%)", min_value=0, max_value=100, value=90, step=1)
+                            specifications = {
+                                "puissance": puissance_w,
+                                "voltage": voltage_v,
+                                "phase": phase,
+                                "mppt": mppt,
+                                "efficacite": efficacite,
+                            }
+                        elif categorie == "Régulateurs":
+                            st.subheader("Caractéristiques techniques du régulateur")
+                            spec_col1, spec_col2, spec_col3 = st.columns(3)
+                            with spec_col1:
+                                voltage_v = st.number_input("Voltage (V)", min_value=0, value=12, step=1)
+                            with spec_col2:
+                                amperage_a = st.number_input("Ampérage (A)", min_value=0, value=0, step=1)
+                                mppt = st.checkbox("MPPT")
+                            with spec_col3:
+                                type_reg = st.selectbox("Type", ["PWM", "MPPT"], index=1)
+                            specifications = {
+                                "voltage": voltage_v,
+                                "amperage": amperage_a,
+                                "mppt": mppt,
+                                "type": type_reg,
+                            }
                         
                         if st.form_submit_button("➕ Ajouter le Produit", type="primary"):
                             if nom and categorie:
@@ -5637,12 +5674,50 @@ if is_user_authenticated() and is_admin_user():
                                         'stock_minimum': stock_minimum,
                                         'unite': unite,
                                         'description': description,
+                                        'specifications': specifications,
+                                        'source': 'manual',
                                         'date_creation': pd.Timestamp.now().isoformat()
                                     }
                                     
                                     success = save_product_to_firebase(product_data)
                                     if success:
                                         st.success("✅ Produit ajouté avec succès!")
+                                        # Synchroniser vers Gestion des Prix des Équipements (catégories principales)
+                                        try:
+                                            prix_data = get_equipment_prices() or {}
+                                            cat_map = {
+                                                "Panneaux Solaires": "panneaux",
+                                                "Batteries": "batteries",
+                                                "Onduleurs": "onduleurs",
+                                                "Régulateurs": "regulateurs",
+                                            }
+                                            if categorie in cat_map:
+                                                cat = cat_map[categorie]
+                                                if cat not in prix_data:
+                                                    prix_data[cat] = {}
+                                                key = re.sub(r"\s+", "_", nom.strip().lower())
+                                                entry = prix_data[cat].get(key, {})
+                                                entry.update({
+                                                    'prix': float(prix_vente) if prix_vente is not None else 0,
+                                                    'puissance': specifications.get('puissance', entry.get('puissance')),
+                                                    'voltage': specifications.get('voltage', entry.get('voltage')),
+                                                    'type': specifications.get('type', entry.get('type')),
+                                                    'capacite': specifications.get('capacite', entry.get('capacite')),
+                                                    'cycles': specifications.get('cycles', entry.get('cycles')),
+                                                    'decharge_max': specifications.get('decharge_max', entry.get('decharge_max')),
+                                                    'phase': specifications.get('phase', entry.get('phase')),
+                                                    'mppt': specifications.get('mppt', entry.get('mppt')),
+                                                    'amperage': specifications.get('amperage', entry.get('amperage')),
+                                                    'courant': specifications.get('courant', entry.get('courant')),
+                                                    'dimensions': specifications.get('dimensions', entry.get('dimensions')),
+                                                    'efficacite': specifications.get('efficacite', entry.get('efficacite')),
+                                                })
+                                                prix_data[cat][key] = entry
+                                                save_equipment_prices(prix_data)
+                                                clear_prices_cache()
+                                                st.info("🔄 Caractéristiques synchronisées avec Gestion des Prix des Équipements")
+                                        except Exception as sync_e:
+                                            st.warning(f"⚠️ Synchronisation des prix échouée: {sync_e}")
                                         clear_stock_cache()
                                         st.rerun()
                                     else:
@@ -5714,10 +5789,24 @@ if is_user_authenticated() and is_admin_user():
                                 
                                 col1, col2 = st.columns(2)
                                 with col1:
+                                    update_on_duplicate = st.checkbox("Mettre à jour si doublon (par nom)", value=True)
                                     if st.button("📥 Importer tous les produits", type="primary"):
                                         progress_bar = st.progress(0)
                                         success_count = 0
                                         error_count = 0
+                                        
+                                        # Charger les produits existants pour détecter les doublons par nom
+                                        existing_by_name = {}
+                                        try:
+                                            from firebase_config import get_all_products_from_firebase, update_product_in_firebase
+                                            existing_products = get_all_products_from_firebase()
+                                            if existing_products:
+                                                for pid, pdata in existing_products.items():
+                                                    name_key = str(pdata.get('nom', '')).strip().lower()
+                                                    if name_key:
+                                                        existing_by_name[name_key] = pid
+                                        except Exception as e:
+                                            st.warning(f"Impossible de charger les produits existants pour la mise à jour: {e}")
                                         
                                         for i, row in df_excel.iterrows():
                                             try:
@@ -5734,11 +5823,24 @@ if is_user_authenticated() and is_admin_user():
                                                     'source': 'import_excel'
                                                 }
                                                 
-                                                if save_product_to_firebase(product_data):
-                                                    success_count += 1
+                                                name_key = str(product_data.get('nom', '')).strip().lower()
+                                                
+                                                # Mettre à jour si doublon, sinon créer
+                                                if update_on_duplicate and name_key in existing_by_name:
+                                                    try:
+                                                        if update_product_in_firebase(existing_by_name[name_key], product_data):
+                                                            success_count += 1
+                                                        else:
+                                                            error_count += 1
+                                                    except Exception as e:
+                                                        error_count += 1
+                                                        st.error(f"Erreur mise à jour ligne {i+1}: {e}")
                                                 else:
-                                                    error_count += 1
-                                                    
+                                                    if save_product_to_firebase(product_data):
+                                                        success_count += 1
+                                                    else:
+                                                        error_count += 1
+                                                
                                             except Exception as e:
                                                 error_count += 1
                                                 st.error(f"Erreur ligne {i+1}: {e}")
@@ -5746,7 +5848,7 @@ if is_user_authenticated() and is_admin_user():
                                             progress_bar.progress((i + 1) / len(df_excel))
                                         
                                         if success_count > 0:
-                                            st.success(f"✅ {success_count} produits importés avec succès!")
+                                            st.success(f"✅ {success_count} produits traités avec succès!")
                                             clear_stock_cache()
                                             if error_count > 0:
                                                 st.warning(f"⚠️ {error_count} erreurs lors de l'importation")
@@ -5918,10 +6020,10 @@ if is_user_authenticated() and is_admin_user():
                                                 selected_product.get('categorie', 'Autres')))
                                         new_prix_achat = st.number_input("Prix d'achat (FCFA)", 
                                                                         value=float(selected_product.get('prix_achat', 0)), 
-                                                                        min_value=0, step=1000)
+                                                                        min_value=0.0, step=1000.0)
                                         new_prix_vente = st.number_input("Prix de vente (FCFA)", 
                                                                         value=float(selected_product.get('prix_vente', 0)), 
-                                                                        min_value=0, step=1000)
+                                                                        min_value=0.0, step=1000.0)
                                     
                                     with col2:
                                         new_stock = st.number_input("Stock actuel", 
@@ -5965,6 +6067,11 @@ if is_user_authenticated() and is_admin_user():
                                     with col2:
                                         if st.form_submit_button("🗑️ Supprimer le Produit", type="secondary"):
                                             if delete_product_from_firebase(selected_product_id):
+                                                # Suppression croisée: retirer l’article du dimensionnement si présent
+                                                delete_dimensionnement_article_if_exists(
+                                                    selected_product.get('nom', ''),
+                                                    selected_product.get('categorie', '')
+                                                )
                                                 st.success("✅ Produit supprimé avec succès!")
                                                 clear_stock_cache()
                                                 st.rerun()
