@@ -80,6 +80,23 @@ def obtenir_produits():
     conn.close()
     return df
 
+def modifier_produit(produit_id, nom, categorie, prix_achat, prix_vente, stock_actuel, stock_min, unite):
+    conn = sqlite3.connect('energie_solaire.db')
+    c = conn.cursor()
+    c.execute('''UPDATE produits SET nom=?, categorie=?, prix_achat=?, prix_vente=?, 
+                 stock_actuel=?, stock_min=?, unite=? WHERE id=?''',
+              (nom, categorie, prix_achat, prix_vente, stock_actuel, stock_min, unite, produit_id))
+    conn.commit()
+    conn.close()
+
+def obtenir_produit_par_id(produit_id):
+    conn = sqlite3.connect('energie_solaire.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM produits WHERE id=?", (produit_id,))
+    produit = c.fetchone()
+    conn.close()
+    return produit
+
 def modifier_stock(produit_id, quantite, type_mouvement, reference=""):
     conn = sqlite3.connect('energie_solaire.db')
     c = conn.cursor()
@@ -230,7 +247,7 @@ def main():
     elif menu == "📦 Gestion des Produits":
         st.header("Gestion des Produits")
         
-        tab1, tab2 = st.tabs(["Liste des Produits", "Ajouter un Produit"])
+        tab1, tab2, tab3 = st.tabs(["Liste des Produits", "Ajouter un Produit", "Modifier un Produit"])
         
         with tab1:
             produits_df = obtenir_produits()
@@ -265,6 +282,57 @@ def main():
                         st.rerun()
                     else:
                         st.error("Le nom du produit est obligatoire")
+        
+        with tab3:
+            produits_df = obtenir_produits()
+            if not produits_df.empty:
+                # Sélection du produit à modifier
+                produit_noms = produits_df['nom'].tolist()
+                produit_choisi = st.selectbox("Sélectionner le produit à modifier", produit_noms)
+                
+                if produit_choisi:
+                    # Récupérer les informations du produit sélectionné
+                    produit_info = produits_df[produits_df['nom'] == produit_choisi].iloc[0]
+                    
+                    with st.form("form_modifier_produit"):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            nom_modif = st.text_input("Nom du produit *", value=produit_info['nom'])
+                            categorie_modif = st.selectbox("Catégorie", 
+                                ["Panneau Solaire", "Batterie", "Onduleur", "Régulateur", 
+                                 "Câbles", "Accessoires", "Autre"],
+                                index=["Panneau Solaire", "Batterie", "Onduleur", "Régulateur", 
+                                       "Câbles", "Accessoires", "Autre"].index(produit_info['categorie']) 
+                                      if produit_info['categorie'] in ["Panneau Solaire", "Batterie", "Onduleur", "Régulateur", 
+                                                                        "Câbles", "Accessoires", "Autre"] else 0)
+                            prix_achat_modif = st.number_input("Prix d'achat (FCFA)", min_value=0.0, step=1000.0, 
+                                                             value=float(produit_info['prix_achat']))
+                            prix_vente_modif = st.number_input("Prix de vente (FCFA)", min_value=0.0, step=1000.0, 
+                                                             value=float(produit_info['prix_vente']))
+                        
+                        with col2:
+                            stock_modif = st.number_input("Stock actuel", min_value=0, step=1, 
+                                                        value=int(produit_info['stock_actuel']))
+                            stock_min_modif = st.number_input("Stock minimum (alerte)", min_value=0, step=1, 
+                                                            value=int(produit_info['stock_min']))
+                            unite_modif = st.selectbox("Unité", ["Pièce", "Mètre", "Lot", "Kit"],
+                                                     index=["Pièce", "Mètre", "Lot", "Kit"].index(produit_info['unite']) 
+                                                           if produit_info['unite'] in ["Pièce", "Mètre", "Lot", "Kit"] else 0)
+                        
+                        submitted_modif = st.form_submit_button("💾 Modifier le produit", type="primary")
+                        
+                        if submitted_modif:
+                            if nom_modif:
+                                modifier_produit(produit_info['id'], nom_modif, categorie_modif, 
+                                               prix_achat_modif, prix_vente_modif, stock_modif, 
+                                               stock_min_modif, unite_modif)
+                                st.success(f"✅ Produit '{nom_modif}' modifié avec succès!")
+                                st.rerun()
+                            else:
+                                st.error("Le nom du produit est obligatoire")
+            else:
+                st.info("Aucun produit disponible pour modification. Ajoutez d'abord des produits!")
     
     # GESTION DES CLIENTS
     elif menu == "👥 Gestion des Clients":
