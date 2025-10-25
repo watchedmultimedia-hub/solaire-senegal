@@ -21,6 +21,9 @@ from firebase_config import (
     update_product_in_firebase,
     save_stock_movement_to_firebase
 )
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 class InvoiceEditor:
     def __init__(self):
@@ -108,7 +111,7 @@ class InvoiceEditor:
             doc_type = st.selectbox("Type de document", ["Facture", "Devis", "Proforma"])
             
             # Statut
-            status = st.selectbox("Statut", ["Brouillon", "Envoyé", "Payé", "En retard", "Annulé"])
+            status = st.selectbox("Statut", ["Brouillon", "Envoyé", "Validé", "Payé", "En retard", "Annulé"])
             
             # Conditions de paiement
             payment_terms = st.text_area("Conditions de paiement", 
@@ -220,6 +223,13 @@ class InvoiceEditor:
                         doc_type, status, payment_terms, st.session_state.invoice_lines,
                         subtotal, tva_rate, tva_amount, discount_rate, discount_amount, total_ttc
                     )
+                # Bouton de validation avec déduction du stock (pour Facture)
+                if doc_type == "Facture" and st.button("✅ Valider et déduire du stock"):
+                    self.save_invoice(
+                        selected_client, invoice_number, invoice_date, due_date,
+                        doc_type, "Validé", payment_terms, st.session_state.invoice_lines,
+                        subtotal, tva_rate, tva_amount, discount_rate, discount_amount, total_ttc
+                    )
             
             with col2:
                 if st.button("📄 Générer PDF"):
@@ -235,7 +245,20 @@ class InvoiceEditor:
                             file_name=f"{doc_type}_{invoice_number}.pdf",
                             mime="application/pdf"
                         )
-            
+                # Nouveau bouton: générer le document Word (DOCX)
+                if st.button("📄 Générer Word (DOCX)"):
+                    docx_data = self.generate_docx(
+                        selected_client, invoice_number, invoice_date, due_date,
+                        doc_type, st.session_state.invoice_lines,
+                        subtotal, tva_rate, tva_amount, discount_rate, discount_amount, total_ttc
+                    )
+                    if docx_data:
+                        st.download_button(
+                            label="📥 Télécharger DOCX",
+                            data=docx_data,
+                            file_name=f"{doc_type}_{invoice_number}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
             with col3:
                 if st.button("🔄 Nouvelle facture"):
                     st.session_state.invoice_lines = []
@@ -245,6 +268,9 @@ class InvoiceEditor:
                     subtotal, tva_rate, tva_amount, discount_rate, discount_amount, total):
         """Sauvegarde la facture dans Firebase"""
         try:
+            # Garder le numéro de facture en session pour le motif des mouvements
+            st.session_state['current_invoice_number'] = number
+            
             invoice_data = {
                 "numero": number,
                 "client": client,
@@ -261,14 +287,16 @@ class InvoiceEditor:
                 "montant_remise": discount_amount,
                 "total_ttc": total,
                 "date_creation": datetime.now().isoformat(),
-                "utilisateur": st.session_state.get("user_email", "admin")
+                "utilisateur": st.session_state.get("user_email", "admin"),
+                # Indicateur de mise à jour du stock selon le statut
+                "stock_updated": True if (doc_type == "Facture" and status in ["Validé", "Payé"]) else False
             }
             
             if save_invoice_to_firebase(invoice_data):
                 st.success(f"{doc_type} sauvegardée avec succès!")
                 
-                # Mettre à jour le stock si c'est une facture
-                if doc_type == "Facture" and status == "Payé":
+                # Mettre à jour le stock pour facture validée ou payée
+                if doc_type == "Facture" and status in ["Validé", "Payé"]:
                     self.update_stock_from_invoice(lines)
                 
                 return True
@@ -281,7 +309,7 @@ class InvoiceEditor:
             return False
     
     def update_stock_from_invoice(self, lines):
-        """Met à jour le stock après une facture payée"""
+        """Met à jour le stock après une facture validée/payée"""
         try:
             products = get_all_products_from_firebase()
             
@@ -290,8 +318,9 @@ class InvoiceEditor:
                     # Récupérer le produit directement par son ID depuis le dictionnaire
                     product = products.get(line['product_id']) if products else None
                     if product:
+                        qty = int(line['quantity']) if isinstance(line.get('quantity'), (int, float)) else 0
                         # Décrémenter le stock
-                        new_stock = max(0, product.get('stock_actuel', 0) - line['quantity'])
+                        new_stock = max(0, product.get('stock_actuel', 0) - qty)
                         product['stock_actuel'] = new_stock
                         
                         # Mettre à jour dans Firebase
@@ -302,7 +331,7 @@ class InvoiceEditor:
                             "produit_id": product['id'],
                             "produit_nom": product.get('nom', ''),
                             "type": "sortie",
-                            "quantite": line['quantity'],
+                            "quantite": qty,
                             "motif": f"Vente - Facture {st.session_state.get('current_invoice_number', '')}",
                             "date": datetime.now().isoformat(),
                             "utilisateur": st.session_state.get("user_email", "admin")
@@ -394,6 +423,73 @@ class InvoiceEditor:
             
         except Exception as e:
             st.error(f"Erreur lors de la génération du PDF: {e}")
+            return None
+
+    def generate_docx(self, client, number, date, due_date, doc_type, lines, 
+                    subtotal, tva_rate, tva_amount, discount_rate, discount_amount, total):
+        """Génère un document Word (DOCX) de la facture"""
+        try:
+            doc = Document()
+            
+            # Titre
+            title = doc.add_heading(f"{doc_type.upper()}", level=0)
+            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            # Informations de base
+            info = doc.add_paragraph()
+            info.add_run(f"Numéro: ").bold = True
+            info.add_run(str(number))
+            info.add_run("\t\tDate: ").bold = True
+            info.add_run(date.strftime('%d/%m/%Y'))
+            info2 = doc.add_paragraph()
+            info2.add_run(f"Client: ").bold = True
+            info2.add_run(str(client))
+            info2.add_run("\t\tÉchéance: ").bold = True
+            info2.add_run(due_date.strftime('%d/%m/%Y'))
+            
+            doc.add_paragraph("")
+            
+            # Tableau des lignes
+            table = doc.add_table(rows=1, cols=4)
+            hdr_cells = table.rows[0].cells
+            hdr_cells[0].text = 'Description'
+            hdr_cells[1].text = 'Qté'
+            hdr_cells[2].text = 'Prix Unit.'
+            hdr_cells[3].text = 'Total'
+            
+            for line in lines:
+                row_cells = table.add_row().cells
+                row_cells[0].text = str(line.get('description', ''))
+                row_cells[1].text = f"{line.get('quantity', 0):.0f}"
+                row_cells[2].text = f"{line.get('unit_price', 0):,.0f}"
+                row_cells[3].text = f"{line.get('total', 0):,.0f}"
+            
+            doc.add_paragraph("")
+            
+            # Totaux
+            totals = doc.add_paragraph()
+            totals.add_run(f"Sous-total: ").bold = True
+            totals.add_run(f"{subtotal:,.0f} FCFA\n")
+            if discount_amount > 0:
+                disc = doc.add_paragraph()
+                disc.add_run(f"Remise ({discount_rate}%): ").bold = True
+                disc.add_run(f"-{discount_amount:,.0f} FCFA\n")
+            tva = doc.add_paragraph()
+            tva.add_run(f"TVA ({tva_rate}%): ").bold = True
+            tva.add_run(f"{tva_amount:,.0f} FCFA\n")
+            total_par = doc.add_paragraph()
+            total_par.add_run("TOTAL TTC: ").bold = True
+            total_par.add_run(f"{total:,.0f} FCFA")
+            
+            # Export en mémoire
+            buffer = io.BytesIO()
+            doc.save(buffer)
+            data = buffer.getvalue()
+            buffer.close()
+            return data
+            
+        except Exception as e:
+            st.error(f"Erreur lors de la génération DOCX: {e}")
             return None
     
     def display_existing_invoices(self):
