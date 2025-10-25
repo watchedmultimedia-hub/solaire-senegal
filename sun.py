@@ -737,7 +737,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
                 for nom, specs in prix_equipements["panneaux"].items():
                     stock_info = get_stock_for_dimensioning_product(nom)
                     if stock_info:
-                        stock_qty = stock_info.get('quantite', 0)
+                        stock_qty = stock_info.get('stock_actuel', 0)
                         if stock_qty > 0:
                             st.success(f"✅ {nom}: {stock_qty} unités")
                         elif stock_qty == 0:
@@ -752,7 +752,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
                 for nom, specs in prix_equipements["batteries"].items():
                     stock_info = get_stock_for_dimensioning_product(nom)
                     if stock_info:
-                        stock_qty = stock_info.get('quantite', 0)
+                        stock_qty = stock_info.get('stock_actuel', 0)
                         if stock_qty > 0:
                             st.success(f"✅ {nom}: {stock_qty} unités")
                         elif stock_qty == 0:
@@ -767,7 +767,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
                 for nom, specs in prix_equipements["onduleurs"].items():
                     stock_info = get_stock_for_dimensioning_product(nom)
                     if stock_info:
-                        stock_qty = stock_info.get('quantite', 0)
+                        stock_qty = stock_info.get('stock_actuel', 0)
                         if stock_qty > 0:
                             st.success(f"✅ {nom}: {stock_qty} unités")
                         elif stock_qty == 0:
