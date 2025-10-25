@@ -934,3 +934,267 @@ def sync_sqlite_to_firebase():
         
     except Exception as e:
         return False, f"Erreur de synchronisation: {e}"
+
+# --- Gestion des utilisateurs (Admins & Techniciens) ---
+@st.cache_data(ttl=300)
+def get_all_users_with_roles():
+    """Retourne la liste des utilisateurs Firebase avec leurs rôles Firestore.
+    Champs: uid, email, display_name, disabled, role
+    """
+    try:
+        db = init_firebase_admin()
+        users = []
+        # Itérer sur tous les comptes Firebase Auth
+        page = auth.list_users()
+        for user in page.iterate_all():
+            role = None
+            try:
+                # Chercher le rôle depuis Firestore (collection 'users' doc par uid)
+                doc = db.collection('users').document(user.uid).get()
+                if doc.exists:
+                    role = doc.to_dict().get('role')
+            except Exception:
+                pass
+            users.append({
+                'uid': user.uid,
+                'email': getattr(user, 'email', ''),
+                'display_name': getattr(user, 'display_name', ''),
+                'disabled': getattr(user, 'disabled', False),
+                'role': role or (user.custom_claims.get('role') if getattr(user, 'custom_claims', None) else None)
+            })
+        return users
+    except Exception as e:
+        st.error(f"Erreur get_all_users_with_roles: {e}")
+        return []
+
+
+def clear_users_cache():
+    try:
+        get_all_users_with_roles.clear()
+    except Exception:
+        pass
+
+
+def get_user_role_by_email(email: str) -> str | None:
+    """Récupère le rôle stocké dans Firestore pour un email."""
+    try:
+        db = init_firebase_admin()
+        if not db or not email:
+            return None
+        email_lower = email.strip().lower()
+        # Doc par uid (préféré), sinon recherche par champ email
+        # Recherche par email
+        q = db.collection('users').where('email', '==', email_lower).limit(1).stream()
+        for d in q:
+            data = d.to_dict() or {}
+            return data.get('role')
+        return None
+    except Exception as e:
+        st.error(f"Erreur get_user_role_by_email: {e}")
+        return None
+
+
+def is_admin_role_email(email: str) -> bool:
+    """Vrai si le rôle Firestore pour cet email est 'admin'."""
+    role = get_user_role_by_email(email)
+    return (role or '').strip().lower() == 'admin'
+
+
+def create_app_user(email: str, password: str, display_name: str, role: str) -> dict | None:
+    """Crée un utilisateur Firebase Auth et enregistre son rôle dans Firestore."""
+    try:
+        db = init_firebase_admin()
+        if not db:
+            return None
+        email_lower = (email or '').strip().lower()
+        if not email_lower or not password:
+            st.error("Email et mot de passe sont requis")
+            return None
+        user_record = auth.create_user(email=email_lower, password=password, display_name=display_name or '')
+        # Définir le rôle en claims (optionnel utile si besoin côté client)
+        try:
+            auth.set_custom_user_claims(user_record.uid, {'role': role})
+        except Exception:
+            pass
+        # Stocker le rôle dans Firestore (source de vérité)
+        doc_data = {
+            'uid': user_record.uid,
+            'email': email_lower,
+            'displayName': display_name or '',
+            'role': (role or 'technicien').strip().lower(),
+            'disabled': False,
+            'createdAt': firestore.SERVER_TIMESTAMP,
+            'updatedAt': firestore.SERVER_TIMESTAMP,
+        }
+        db.collection('users').document(user_record.uid).set(doc_data)
+        try:
+            log_change(
+                event_type='user.create',
+                item_id=user_record.uid,
+                description=f"Création utilisateur {email_lower}",
+                before=None,
+                after=doc_data,
+                metadata={'collection': 'users'}
+            )
+        except Exception:
+            pass
+        clear_users_cache()
+        return {'uid': user_record.uid, 'email': email_lower}
+    except Exception as e:
+        st.error(f"Erreur create_app_user: {e}")
+        return None
+
+
+def set_user_role(uid_or_email: str, role: str) -> bool:
+    """Met à jour le rôle (admin/technicien/client) dans Firestore et en claims."""
+    try:
+        db = init_firebase_admin()
+        if not db:
+            return False
+        uid = uid_or_email
+        # Résoudre par email si nécessaire
+        if '@' in (uid_or_email or ''):
+            try:
+                user_record = auth.get_user_by_email(uid_or_email)
+                uid = user_record.uid
+            except Exception:
+                return False
+        role_norm = (role or '').strip().lower()
+        if role_norm not in ('admin', 'technicien', 'client'):
+            st.error("Rôle invalide: choisir 'admin', 'technicien' ou 'client'")
+            return False
+        doc_ref = db.collection('users').document(uid)
+        before_doc = None
+        try:
+            snap = doc_ref.get()
+            before_doc = snap.to_dict() if snap.exists else None
+        except Exception:
+            pass
+        doc_ref.set({'role': role_norm, 'updatedAt': firestore.SERVER_TIMESTAMP}, merge=True)
+        try:
+            auth.set_custom_user_claims(uid, {'role': role_norm})
+        except Exception:
+            pass
+        after_doc = None
+        try:
+            snap2 = doc_ref.get()
+            after_doc = snap2.to_dict() if snap2.exists else {'role': role_norm}
+        except Exception:
+            after_doc = {'role': role_norm}
+        try:
+            log_change(
+                event_type='user.role.update',
+                item_id=uid,
+                description=f"Mise à jour rôle -> {role_norm}",
+                before=before_doc,
+                after=after_doc,
+                metadata={'collection': 'users'}
+            )
+        except Exception:
+            pass
+        clear_users_cache()
+        return True
+    except Exception as e:
+        st.error(f"Erreur set_user_role: {e}")
+        return False
+
+
+def disable_app_user(uid_or_email: str, disabled: bool) -> bool:
+    """Active/Désactive un utilisateur Firebase Auth et met à jour Firestore."""
+    try:
+        db = init_firebase_admin()
+        if not db:
+            return False
+        uid = uid_or_email
+        if '@' in (uid_or_email or ''):
+            try:
+                user_record = auth.get_user_by_email(uid_or_email)
+                uid = user_record.uid
+            except Exception:
+                return False
+        auth.update_user(uid, disabled=bool(disabled))
+        doc_ref = db.collection('users').document(uid)
+        before_doc = None
+        try:
+            snap = doc_ref.get()
+            before_doc = snap.to_dict() if snap.exists else None
+        except Exception:
+            pass
+        doc_ref.set({'disabled': bool(disabled), 'updatedAt': firestore.SERVER_TIMESTAMP}, merge=True)
+        after_doc = None
+        try:
+            snap2 = doc_ref.get()
+            after_doc = snap2.to_dict() if snap2.exists else {'disabled': bool(disabled)}
+        except Exception:
+            after_doc = {'disabled': bool(disabled)}
+        try:
+            log_change(
+                event_type='user.disable',
+                item_id=uid,
+                description=f"Utilisateur {'désactivé' if disabled else 'activé'}",
+                before=before_doc,
+                after=after_doc,
+                metadata={'collection': 'users'}
+            )
+        except Exception:
+            pass
+        clear_users_cache()
+        return True
+    except Exception as e:
+        st.error(f"Erreur disable_app_user: {e}")
+        return False
+
+
+def delete_app_user(uid_or_email: str) -> bool:
+    """Supprime un utilisateur Firebase Auth et son doc Firestore."""
+    try:
+        db = init_firebase_admin()
+        if not db:
+            return False
+        uid = uid_or_email
+        email_val = None
+        if '@' in (uid_or_email or ''):
+            try:
+                user_record = auth.get_user_by_email(uid_or_email)
+                uid = user_record.uid
+                email_val = user_record.email
+            except Exception:
+                return False
+        before_doc = None
+        try:
+            snap = db.collection('users').document(uid).get()
+            before_doc = snap.to_dict() if snap.exists else None
+        except Exception:
+            pass
+        auth.delete_user(uid)
+        try:
+            db.collection('users').document(uid).delete()
+        except Exception:
+            pass
+        try:
+            log_change(
+                event_type='user.delete',
+                item_id=uid,
+                description=f"Suppression utilisateur {email_val or uid}",
+                before=before_doc,
+                after=None,
+                metadata={'collection': 'users'}
+            )
+        except Exception:
+            pass
+        clear_users_cache()
+        return True
+    except Exception as e:
+        st.error(f"Erreur delete_app_user: {e}")
+        return False
+
+
+def get_password_reset_link(email: str) -> str | None:
+    """Génère un lien de réinitialisation de mot de passe pour l'email donné."""
+    try:
+        if not email:
+            return None
+        return auth.generate_password_reset_link(email.strip().lower())
+    except Exception as e:
+        st.error(f"Erreur get_password_reset_link: {e}")
+        return None
