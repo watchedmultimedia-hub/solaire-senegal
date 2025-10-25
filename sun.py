@@ -24,7 +24,7 @@ from firebase_config import (
     clear_labor_percentages_cache, save_accessories_rate, get_accessories_rate, clear_accessories_rate_cache,
     initialize_accessories_rate_in_firebase, get_change_history,
     # Fonctions de gestion de stock
-    save_product_to_firebase, get_all_products_from_firebase, update_product_in_firebase,
+    save_product_to_firebase, get_all_products_from_firebase, update_product_in_firebase, delete_product_from_firebase,
     save_client_to_firebase, get_all_clients_from_firebase,
     save_invoice_to_firebase, get_all_invoices_from_firebase,
     save_stock_movement_to_firebase, get_stock_movements_from_firebase,
@@ -5651,6 +5651,329 @@ if is_user_authenticated() and is_admin_user():
                                     st.error(f"❌ Erreur: {e}")
                             else:
                                 st.error("❌ Veuillez remplir tous les champs obligatoires")
+                
+                # Interface d'importation Excel avec mappage de colonnes
+                with st.expander("📊 Importer des Produits depuis Excel", expanded=False):
+                    st.markdown("### 📥 Importation Excel avec Mappage de Colonnes")
+                    
+                    uploaded_file = st.file_uploader(
+                        "Choisir un fichier Excel (.xlsx, .xls)", 
+                        type=['xlsx', 'xls'],
+                        help="Téléchargez votre fichier Excel contenant la liste des produits"
+                    )
+                    
+                    if uploaded_file is not None:
+                        try:
+                            # Lire le fichier Excel
+                            df_excel = pd.read_excel(uploaded_file)
+                            
+                            st.success(f"✅ Fichier chargé avec succès! {len(df_excel)} lignes trouvées.")
+                            
+                            # Aperçu des données
+                            st.markdown("**📋 Aperçu des données:**")
+                            st.dataframe(df_excel.head(), use_container_width=True)
+                            
+                            # Mappage des colonnes
+                            st.markdown("### 🔗 Mappage des Colonnes")
+                            st.info("Associez les colonnes de votre fichier Excel aux champs du système:")
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                nom_col = st.selectbox("Nom du produit", [""] + list(df_excel.columns), key="nom_mapping")
+                                categorie_col = st.selectbox("Catégorie", [""] + list(df_excel.columns), key="cat_mapping")
+                                prix_achat_col = st.selectbox("Prix d'achat", [""] + list(df_excel.columns), key="achat_mapping")
+                                prix_vente_col = st.selectbox("Prix de vente", [""] + list(df_excel.columns), key="vente_mapping")
+                            
+                            with col2:
+                                stock_col = st.selectbox("Stock initial", [""] + list(df_excel.columns), key="stock_mapping")
+                                stock_min_col = st.selectbox("Stock minimum", [""] + list(df_excel.columns), key="min_mapping")
+                                unite_col = st.selectbox("Unité", [""] + list(df_excel.columns), key="unite_mapping")
+                                description_col = st.selectbox("Description (optionnel)", [""] + list(df_excel.columns), key="desc_mapping")
+                            
+                            # Validation et importation
+                            if nom_col:
+                                st.markdown("### ✅ Validation et Importation")
+                                
+                                # Aperçu du mappage
+                                preview_data = []
+                                for i, row in df_excel.head(3).iterrows():
+                                    preview_data.append({
+                                        'Nom': row[nom_col] if nom_col else '',
+                                        'Catégorie': row[categorie_col] if categorie_col else 'Autres',
+                                        'Prix Achat': row[prix_achat_col] if prix_achat_col else 0,
+                                        'Prix Vente': row[prix_vente_col] if prix_vente_col else 0,
+                                        'Stock': row[stock_col] if stock_col else 0,
+                                        'Stock Min': row[stock_min_col] if stock_min_col else 0,
+                                        'Unité': row[unite_col] if unite_col else 'pièce',
+                                        'Description': row[description_col] if description_col else ''
+                                    })
+                                
+                                st.markdown("**📋 Aperçu du mappage (3 premières lignes):**")
+                                st.dataframe(pd.DataFrame(preview_data), use_container_width=True)
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    if st.button("📥 Importer tous les produits", type="primary"):
+                                        progress_bar = st.progress(0)
+                                        success_count = 0
+                                        error_count = 0
+                                        
+                                        for i, row in df_excel.iterrows():
+                                            try:
+                                                product_data = {
+                                                    'nom': str(row[nom_col]) if nom_col and pd.notna(row[nom_col]) else f"Produit_{i+1}",
+                                                    'categorie': str(row[categorie_col]) if categorie_col and pd.notna(row[categorie_col]) else 'Autres',
+                                                    'prix_achat': float(row[prix_achat_col]) if prix_achat_col and pd.notna(row[prix_achat_col]) else 0,
+                                                    'prix_vente': float(row[prix_vente_col]) if prix_vente_col and pd.notna(row[prix_vente_col]) else 0,
+                                                    'stock_actuel': int(row[stock_col]) if stock_col and pd.notna(row[stock_col]) else 0,
+                                                    'stock_minimum': int(row[stock_min_col]) if stock_min_col and pd.notna(row[stock_min_col]) else 0,
+                                                    'unite': str(row[unite_col]) if unite_col and pd.notna(row[unite_col]) else 'pièce',
+                                                    'description': str(row[description_col]) if description_col and pd.notna(row[description_col]) else '',
+                                                    'date_creation': pd.Timestamp.now().isoformat(),
+                                                    'source': 'import_excel'
+                                                }
+                                                
+                                                if save_product_to_firebase(product_data):
+                                                    success_count += 1
+                                                else:
+                                                    error_count += 1
+                                                    
+                                            except Exception as e:
+                                                error_count += 1
+                                                st.error(f"Erreur ligne {i+1}: {e}")
+                                            
+                                            progress_bar.progress((i + 1) / len(df_excel))
+                                        
+                                        if success_count > 0:
+                                            st.success(f"✅ {success_count} produits importés avec succès!")
+                                            clear_stock_cache()
+                                            if error_count > 0:
+                                                st.warning(f"⚠️ {error_count} erreurs lors de l'importation")
+                                            st.rerun()
+                                        else:
+                                            st.error("❌ Aucun produit n'a pu être importé")
+                                
+                                with col2:
+                                    if st.button("🔄 Réinitialiser le mappage"):
+                                        st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"❌ Erreur lors de la lecture du fichier: {e}")
+                
+                # Synchronisation des produits de dimensionnement
+                with st.expander("🔄 Synchroniser les Produits de Dimensionnement", expanded=False):
+                    st.markdown("### ⚡ Ajouter les Produits du Dimensionnement au Stock")
+                    st.info("Cette fonction permet d'ajouter automatiquement tous les produits utilisés dans le dimensionnement vers le gestionnaire de stock.")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("**📦 Produits disponibles dans le dimensionnement:**")
+                        
+                        # Compter les produits par catégorie
+                        panneaux_count = len(PRIX_EQUIPEMENTS["panneaux"])
+                        batteries_count = len(PRIX_EQUIPEMENTS["batteries"])
+                        onduleurs_count = len(PRIX_EQUIPEMENTS["onduleurs"])
+                        regulateurs_count = len(PRIX_EQUIPEMENTS["regulateurs"])
+                        
+                        st.metric("Panneaux Solaires", panneaux_count)
+                        st.metric("Batteries", batteries_count)
+                        st.metric("Onduleurs", onduleurs_count)
+                        st.metric("Régulateurs", regulateurs_count)
+                        
+                        total_products = panneaux_count + batteries_count + onduleurs_count + regulateurs_count
+                        st.metric("**Total**", total_products)
+                    
+                    with col2:
+                        st.markdown("**⚙️ Options de synchronisation:**")
+                        
+                        sync_mode = st.radio(
+                            "Mode de synchronisation:",
+                            ["Ajouter seulement les nouveaux produits", "Mettre à jour les prix existants", "Synchronisation complète"],
+                            help="Choisissez comment traiter les produits déjà existants"
+                        )
+                        
+                        default_stock = st.number_input("Stock initial par défaut", min_value=0, value=10, step=1)
+                        default_stock_min = st.number_input("Stock minimum par défaut", min_value=0, value=2, step=1)
+                        
+                        if st.button("🔄 Synchroniser les Produits", type="primary"):
+                            progress_bar = st.progress(0)
+                            success_count = 0
+                            updated_count = 0
+                            error_count = 0
+                            
+                            # Obtenir les produits existants
+                            existing_products = get_all_products_from_firebase() or {}
+                            existing_names = {prod.get('nom', '').lower(): prod_id for prod_id, prod in existing_products.items()}
+                            
+                            all_equipment = []
+                            
+                            # Préparer tous les équipements
+                            for category, items in PRIX_EQUIPEMENTS.items():
+                                category_name = {
+                                    "panneaux": "Panneaux Solaires",
+                                    "batteries": "Batteries", 
+                                    "onduleurs": "Onduleurs",
+                                    "regulateurs": "Régulateurs"
+                                }.get(category, "Autres")
+                                
+                                for name, specs in items.items():
+                                    all_equipment.append((category_name, name, specs))
+                            
+                            for i, (category, name, specs) in enumerate(all_equipment):
+                                try:
+                                    # Calculer prix d'achat estimé (70% du prix de vente)
+                                    prix_vente = specs.get('prix', 0)
+                                    prix_achat_estime = int(prix_vente * 0.7)
+                                    
+                                    product_data = {
+                                        'nom': name,
+                                        'categorie': category,
+                                        'prix_achat': prix_achat_estime,
+                                        'prix_vente': prix_vente,
+                                        'stock_actuel': default_stock,
+                                        'stock_minimum': default_stock_min,
+                                        'unite': 'pièce',
+                                        'description': f"Synchronisé depuis le dimensionnement - {category}",
+                                        'date_creation': pd.Timestamp.now().isoformat(),
+                                        'source': 'dimensionnement',
+                                        'specifications': specs
+                                    }
+                                    
+                                    # Vérifier si le produit existe déjà
+                                    existing_id = existing_names.get(name.lower())
+                                    
+                                    if existing_id:
+                                        if sync_mode in ["Mettre à jour les prix existants", "Synchronisation complète"]:
+                                            # Mettre à jour le produit existant
+                                            if update_product_in_firebase(existing_id, product_data):
+                                                updated_count += 1
+                                            else:
+                                                error_count += 1
+                                        # Sinon, ignorer (produit déjà existant)
+                                    else:
+                                        # Ajouter nouveau produit
+                                        if save_product_to_firebase(product_data):
+                                            success_count += 1
+                                        else:
+                                            error_count += 1
+                                            
+                                except Exception as e:
+                                    error_count += 1
+                                    st.error(f"Erreur pour {name}: {e}")
+                                
+                                progress_bar.progress((i + 1) / len(all_equipment))
+                            
+                            # Afficher les résultats
+                            if success_count > 0 or updated_count > 0:
+                                st.success(f"✅ Synchronisation terminée!")
+                                if success_count > 0:
+                                    st.info(f"📦 {success_count} nouveaux produits ajoutés")
+                                if updated_count > 0:
+                                    st.info(f"🔄 {updated_count} produits mis à jour")
+                                if error_count > 0:
+                                    st.warning(f"⚠️ {error_count} erreurs")
+                                
+                                clear_stock_cache()
+                                st.rerun()
+                            else:
+                                if error_count > 0:
+                                    st.error(f"❌ {error_count} erreurs lors de la synchronisation")
+                                else:
+                                    st.info("ℹ️ Aucune modification nécessaire")
+                
+                # Interface d'édition rapide des produits existants
+                with st.expander("✏️ Édition Rapide des Produits", expanded=False):
+                    st.markdown("### 🛠️ Modifier les Produits Existants")
+                    
+                    try:
+                        products = get_all_products_from_firebase()
+                        if products:
+                            # Sélection du produit à modifier
+                            product_names = {f"{prod.get('nom', '')} ({prod.get('categorie', '')})": prod_id 
+                                           for prod_id, prod in products.items()}
+                            
+                            selected_product_display = st.selectbox(
+                                "Sélectionner un produit à modifier:",
+                                [""] + list(product_names.keys())
+                            )
+                            
+                            if selected_product_display:
+                                selected_product_id = product_names[selected_product_display]
+                                selected_product = products[selected_product_id]
+                                
+                                st.markdown(f"**Modification de:** {selected_product.get('nom', '')}")
+                                
+                                with st.form("edit_product"):
+                                    col1, col2 = st.columns(2)
+                                    
+                                    with col1:
+                                        new_nom = st.text_input("Nom", value=selected_product.get('nom', ''))
+                                        new_categorie = st.selectbox("Catégorie", [
+                                            "Panneaux Solaires", "Batteries", "Onduleurs", 
+                                            "Régulateurs", "Accessoires", "Câbles", "Autres"
+                                        ], index=["Panneaux Solaires", "Batteries", "Onduleurs", 
+                                                "Régulateurs", "Accessoires", "Câbles", "Autres"].index(
+                                                selected_product.get('categorie', 'Autres')))
+                                        new_prix_achat = st.number_input("Prix d'achat (FCFA)", 
+                                                                        value=float(selected_product.get('prix_achat', 0)), 
+                                                                        min_value=0, step=1000)
+                                        new_prix_vente = st.number_input("Prix de vente (FCFA)", 
+                                                                        value=float(selected_product.get('prix_vente', 0)), 
+                                                                        min_value=0, step=1000)
+                                    
+                                    with col2:
+                                        new_stock = st.number_input("Stock actuel", 
+                                                                   value=int(selected_product.get('stock_actuel', 0)), 
+                                                                   min_value=0, step=1)
+                                        new_stock_min = st.number_input("Stock minimum", 
+                                                                       value=int(selected_product.get('stock_minimum', 0)), 
+                                                                       min_value=0, step=1)
+                                        new_unite = st.selectbox("Unité", ["pièce", "mètre", "kg", "litre", "lot"],
+                                                                index=["pièce", "mètre", "kg", "litre", "lot"].index(
+                                                                    selected_product.get('unite', 'pièce')))
+                                        new_description = st.text_area("Description", 
+                                                                      value=selected_product.get('description', ''), 
+                                                                      height=100)
+                                    
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        if st.form_submit_button("💾 Sauvegarder les Modifications", type="primary"):
+                                            try:
+                                                updated_data = {
+                                                    'nom': new_nom,
+                                                    'categorie': new_categorie,
+                                                    'prix_achat': new_prix_achat,
+                                                    'prix_vente': new_prix_vente,
+                                                    'stock_actuel': new_stock,
+                                                    'stock_minimum': new_stock_min,
+                                                    'unite': new_unite,
+                                                    'description': new_description,
+                                                    'date_modification': pd.Timestamp.now().isoformat()
+                                                }
+                                                
+                                                if update_product_in_firebase(selected_product_id, updated_data):
+                                                    st.success("✅ Produit modifié avec succès!")
+                                                    clear_stock_cache()
+                                                    st.rerun()
+                                                else:
+                                                    st.error("❌ Erreur lors de la modification")
+                                            except Exception as e:
+                                                st.error(f"❌ Erreur: {e}")
+                                    
+                                    with col2:
+                                        if st.form_submit_button("🗑️ Supprimer le Produit", type="secondary"):
+                                            if delete_product_from_firebase(selected_product_id):
+                                                st.success("✅ Produit supprimé avec succès!")
+                                                clear_stock_cache()
+                                                st.rerun()
+                                            else:
+                                                st.error("❌ Erreur lors de la suppression")
+                        else:
+                            st.info("Aucun produit disponible pour modification")
+                    except Exception as e:
+                        st.error(f"Erreur lors du chargement des produits: {e}")
             
             # Gestion des Clients
             with stock_tab3:
