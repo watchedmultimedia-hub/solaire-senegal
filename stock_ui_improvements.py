@@ -14,47 +14,40 @@ import numpy as np
 def create_modern_metric_card(title, value, delta=None, delta_color="normal", icon="📊"):
     """Crée une carte de métrique moderne avec design amélioré"""
     
-    # Couleur selon le delta
-    if delta_color == "positive":
-        delta_style = "color: #28a745; font-weight: bold;"
-        delta_icon = "↗️"
-    elif delta_color == "negative":
-        delta_style = "color: #dc3545; font-weight: bold;"
-        delta_icon = "↘️"
-    else:
-        delta_style = "color: #6c757d;"
-        delta_icon = "➡️"
-    
-    delta_html = ""
-    if delta is not None:
-        delta_html = f"""
-        <div style="{delta_style} font-size: 14px; margin-top: 5px;">
-            {delta_icon} {delta}
+    # Utiliser les composants natifs de Streamlit pour éviter les problèmes de rendu HTML
+    with st.container():
+        # Créer un style de conteneur simple
+        st.markdown(f"""
+        <div style="
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #007bff;
+            margin: 5px 0;
+        ">
+            <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 20px; margin-right: 8px;">{icon}</span>
+                <span style="color: #495057; font-size: 14px; font-weight: 500;">{title}</span>
+            </div>
         </div>
-        """
-    
-    card_html = f"""
-    <div style="
-        background: linear-gradient(135deg, #ffffff, #f8f9fa);
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        border-left: 4px solid #007bff;
-        margin: 10px 0;
-        transition: transform 0.2s ease;
-    ">
-        <div style="display: flex; align-items: center; margin-bottom: 10px;">
-            <span style="font-size: 24px; margin-right: 10px;">{icon}</span>
-            <h4 style="margin: 0; color: #495057; font-size: 16px;">{title}</h4>
-        </div>
-        <div style="font-size: 32px; font-weight: bold; color: #007bff; margin: 10px 0;">
-            {value}
-        </div>
-        {delta_html}
-    </div>
-    """
-    
-    st.markdown(card_html, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+        
+        # Utiliser st.metric pour la valeur et le delta (plus fiable)
+        if delta is not None:
+            # Déterminer la couleur du delta
+            delta_color_map = {
+                "positive": "normal",  # Streamlit gère automatiquement les couleurs
+                "negative": "normal",
+                "normal": "off"
+            }
+            st.metric(
+                label="",
+                value=value,
+                delta=delta,
+                delta_color=delta_color_map.get(delta_color, "off")
+            )
+        else:
+            st.metric(label="", value=value)
 
 def create_stock_alert_card(product_name, current_stock, min_stock, category=""):
     """Crée une carte d'alerte de stock avec design moderne"""
