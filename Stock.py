@@ -252,8 +252,8 @@ def main():
                     prix_vente = st.number_input("Prix de vente (FCFA)", min_value=0.0, step=1000.0)
                 
                 with col2:
-                    stock = st.number_input("Stock initial", min_value=0, value=0)
-                    stock_min = st.number_input("Stock minimum (alerte)", min_value=0, value=5)
+                    stock = st.number_input("Stock initial", min_value=0, value=0, step=1)
+                    stock_min = st.number_input("Stock minimum (alerte)", min_value=0, value=5, step=1)
                     unite = st.selectbox("Unité", ["Pièce", "Mètre", "Lot", "Kit"])
                 
                 submitted = st.form_submit_button("➕ Ajouter le produit")
