@@ -128,7 +128,9 @@ class InvoiceEditor:
             with col1:
                 # Sélection produit ou service personnalisé
                 products = get_all_products_from_firebase()
-                product_options = ["Service personnalisé..."] + [p.get('nom', '') for p in products]
+                # Convertir le dictionnaire en liste pour l'interface
+                products_list = list(products.values()) if products else []
+                product_options = ["Service personnalisé..."] + [p.get('nom', '') for p in products_list]
                 selected_product = st.selectbox("Produit/Service", product_options, key="new_product")
             
             with col2:
@@ -136,7 +138,7 @@ class InvoiceEditor:
                     description = st.text_input("Description", key="new_desc")
                     unit_price = st.number_input("Prix unitaire (FCFA)", min_value=0.0, key="new_price")
                 else:
-                    product_data = next((p for p in products if p.get('nom') == selected_product), None)
+                    product_data = next((p for p in products_list if p.get('nom') == selected_product), None)
                     description = selected_product
                     unit_price = product_data.get('prix_vente', 0) if product_data else 0
                     st.write(f"Prix: {unit_price:,.0f} FCFA")
@@ -285,7 +287,8 @@ class InvoiceEditor:
             
             for line in lines:
                 if line.get('product_id'):
-                    product = next((p for p in products if p.get('id') == line['product_id']), None)
+                    # Récupérer le produit directement par son ID depuis le dictionnaire
+                    product = products.get(line['product_id']) if products else None
                     if product:
                         # Décrémenter le stock
                         new_stock = max(0, product.get('stock_actuel', 0) - line['quantity'])
