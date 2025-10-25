@@ -1,4 +1,10 @@
 import streamlit as st
+st.set_page_config(
+    page_title="Dimensionnement Solaire Sénégal",
+    page_icon="☀️",
+    layout="wide"
+)
+
 import requests
 import json
 import re
@@ -16,8 +22,19 @@ from firebase_config import (
     delete_quote, delete_client_request,
     is_admin_email, save_labor_percentages, get_labor_percentages, initialize_labor_percentages_in_firebase,
     clear_labor_percentages_cache, save_accessories_rate, get_accessories_rate, clear_accessories_rate_cache,
-    initialize_accessories_rate_in_firebase, get_change_history
+    initialize_accessories_rate_in_firebase, get_change_history,
+    # Fonctions de gestion de stock
+    save_product_to_firebase, get_all_products_from_firebase, update_product_in_firebase,
+    save_client_to_firebase, get_all_clients_from_firebase,
+    save_invoice_to_firebase, get_all_invoices_from_firebase,
+    save_stock_movement_to_firebase, get_stock_movements_from_firebase,
+    clear_stock_cache, sync_sqlite_to_firebase
 )
+
+# Import des nouveaux modules
+from sync_products import sync_dimensioning_to_stock, get_stock_for_dimensioning_product, check_stock_availability, update_stock_after_quote
+from invoice_editor import show_invoice_editor
+from stock_ui_improvements import create_modern_metric_card, create_stock_alert_card, create_advanced_stock_chart, create_financial_overview, create_interactive_product_table, show_stock_alerts_sidebar
 
 # Fonction pour synchroniser les données locales vers Firebase
 def sync_local_to_firebase():
@@ -67,12 +84,7 @@ def clear_prices_cache():
     """Vide le cache des prix pour forcer le rechargement"""
     get_current_prices.clear()
 
-# Configuration de la page
-st.set_page_config(
-    page_title="Dimensionnement Solaire Sénégal",
-    page_icon="☀️",
-    layout="wide"
-)
+# Configuration de la page définie au début du script (bloc déplacé) 
 
 # Valeurs par défaut pour éviter les erreurs si l’utilisateur n’a pas encore configuré tab1
 if 'consommation' not in st.session_state:
@@ -644,6 +656,56 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     # Obtenir les prix actuels (Firebase ou par défaut)
     prix_equipements = get_current_prices()
     
+    # Affichage du stock disponible pour les équipements
+    if st.session_state.get('user_role') == 'admin':
+        with st.expander("📦 Stock disponible pour les équipements", expanded=False):
+            col_stock1, col_stock2, col_stock3 = st.columns(3)
+            
+            with col_stock1:
+                st.markdown("**🌞 Panneaux Solaires**")
+                for nom, specs in prix_equipements["panneaux"].items():
+                    stock_info = get_stock_for_dimensioning_product("panneau", nom)
+                    if stock_info:
+                        stock_qty = stock_info.get('quantite', 0)
+                        if stock_qty > 0:
+                            st.success(f"✅ {nom}: {stock_qty} unités")
+                        elif stock_qty == 0:
+                            st.warning(f"⚠️ {nom}: Rupture de stock")
+                        else:
+                            st.info(f"ℹ️ {nom}: Stock non renseigné")
+                    else:
+                        st.info(f"ℹ️ {nom}: Non synchronisé")
+            
+            with col_stock2:
+                st.markdown("**🔋 Batteries**")
+                for nom, specs in prix_equipements["batteries"].items():
+                    stock_info = get_stock_for_dimensioning_product("batterie", nom)
+                    if stock_info:
+                        stock_qty = stock_info.get('quantite', 0)
+                        if stock_qty > 0:
+                            st.success(f"✅ {nom}: {stock_qty} unités")
+                        elif stock_qty == 0:
+                            st.warning(f"⚠️ {nom}: Rupture de stock")
+                        else:
+                            st.info(f"ℹ️ {nom}: Stock non renseigné")
+                    else:
+                        st.info(f"ℹ️ {nom}: Non synchronisé")
+            
+            with col_stock3:
+                st.markdown("**⚡ Onduleurs**")
+                for nom, specs in prix_equipements["onduleurs"].items():
+                    stock_info = get_stock_for_dimensioning_product("onduleur", nom)
+                    if stock_info:
+                        stock_qty = stock_info.get('quantite', 0)
+                        if stock_qty > 0:
+                            st.success(f"✅ {nom}: {stock_qty} unités")
+                        elif stock_qty == 0:
+                            st.warning(f"⚠️ {nom}: Rupture de stock")
+                        else:
+                            st.info(f"ℹ️ {nom}: Stock non renseigné")
+                    else:
+                        st.info(f"ℹ️ {nom}: Non synchronisé")
+    
     type_batterie = choix_utilisateur["type_batterie"]
     type_onduleur = choix_utilisateur["type_onduleur"]
     # Supporte l'absence de type_regulateur (ex: onduleur Hybride)
@@ -1191,7 +1253,7 @@ with tab1:
             consommation_simple = st.number_input(
                 "Consommation électrique journalière (kWh/jour)",
                 min_value=0.5,
-                max_value=100.0,
+                max_value=1000.0,
                 step=0.5,
                 help="Estimez votre consommation quotidienne moyenne",
                 key="conso_journaliere_input"
@@ -2960,6 +3022,124 @@ Pour plus d'informations : energiesolairesenegal.com
     - L'accessibilité du site
     - Les promotions en cours
     """)
+    
+    # Section de gestion du stock pour les administrateurs
+    if st.session_state.get('user_role') == 'admin' and 'equipements' in st.session_state:
+        st.markdown("---")
+        st.markdown("### 📦 Gestion du Stock - Équipements Dimensionnés")
+        
+        with st.expander("🔄 Actions sur le stock", expanded=False):
+            st.info("💡 Gérez le stock des équipements sélectionnés pour ce dimensionnement")
+            
+            # Récupération des équipements dimensionnés
+            equip = st.session_state.equipements
+            
+            # Vérification de la disponibilité en stock
+            st.markdown("#### 📊 Vérification de la disponibilité")
+            
+            equipements_necessaires = []
+            if equip["panneau"][0]:  # Si un panneau est sélectionné
+                equipements_necessaires.append({
+                    "type": "panneau",
+                    "nom": equip["panneau"][0],
+                    "quantite": equip["panneau"][1]
+                })
+            
+            if equip["batterie"][0]:  # Si une batterie est sélectionnée
+                equipements_necessaires.append({
+                    "type": "batterie", 
+                    "nom": equip["batterie"][0],
+                    "quantite": equip["batterie"][1]
+                })
+            
+            if equip["onduleur"][0]:  # Si un onduleur est sélectionné
+                onduleur_nom, nb_onduleurs = equip["onduleur"] if isinstance(equip["onduleur"], tuple) else (equip["onduleur"], 1)
+                equipements_necessaires.append({
+                    "type": "onduleur",
+                    "nom": onduleur_nom,
+                    "quantite": nb_onduleurs
+                })
+            
+            if equip["regulateur"]:  # Si un régulateur est sélectionné
+                equipements_necessaires.append({
+                    "type": "regulateur",
+                    "nom": equip["regulateur"],
+                    "quantite": 1
+                })
+            
+            # Vérification du stock
+            stock_status = check_stock_availability(equipements_necessaires)
+            
+            if stock_status["disponible"]:
+                st.success("✅ Tous les équipements sont disponibles en stock !")
+            else:
+                st.warning("⚠️ Certains équipements ne sont pas disponibles en quantité suffisante")
+                
+                if stock_status["manquants"]:
+                    st.markdown("**Équipements manquants :**")
+                    for item in stock_status["manquants"]:
+                        st.error(f"❌ {item['nom']} - Besoin: {item['quantite_demandee']}, Stock: {item['stock_disponible']}")
+                
+                if stock_status["stock_faible"]:
+                    st.markdown("**Stock faible :**")
+                    for item in stock_status["stock_faible"]:
+                        st.warning(f"⚠️ {item['nom']} - Besoin: {item['quantite_demandee']}, Stock: {item['stock_disponible']}")
+            
+            # Actions sur le stock
+            st.markdown("#### ⚡ Actions rapides")
+            
+            col_action1, col_action2, col_action3 = st.columns(3)
+            
+            with col_action1:
+                if st.button("🔄 Actualiser le stock", use_container_width=True):
+                    # Synchroniser les produits du dimensionnement vers le stock
+                    sync_dimensioning_to_stock()
+                    st.success("✅ Stock synchronisé avec les produits du dimensionnement")
+                    st.rerun()
+            
+            with col_action2:
+                if st.button("📋 Créer devis/facture", use_container_width=True):
+                    # Rediriger vers l'éditeur de factures avec les équipements pré-remplis
+                    st.session_state['equipements_pour_facture'] = equipements_necessaires
+                    st.info("💡 Rendez-vous dans l'onglet 'Gestion de Stock' > 'Factures' pour créer le document")
+            
+            with col_action3:
+                if st.button("📦 Réserver le stock", use_container_width=True):
+                    if stock_status["disponible"]:
+                        # Simuler une réservation en créant un mouvement de stock
+                        for item in equipements_necessaires:
+                            # Ici on pourrait implémenter une vraie réservation
+                            # Pour l'instant, on affiche juste un message
+                            pass
+                        st.success("✅ Stock réservé pour ce devis (fonctionnalité à implémenter)")
+                    else:
+                        st.error("❌ Impossible de réserver - stock insuffisant")
+            
+            # Affichage détaillé du stock pour chaque équipement
+            st.markdown("#### 📋 Détail du stock par équipement")
+            
+            for item in equipements_necessaires:
+                with st.container():
+                    col_detail1, col_detail2, col_detail3 = st.columns([2, 1, 1])
+                    
+                    with col_detail1:
+                        st.markdown(f"**{item['nom']}** ({item['type']})")
+                    
+                    with col_detail2:
+                        st.markdown(f"Besoin: **{item['quantite']}**")
+                    
+                    with col_detail3:
+                        stock_info = get_stock_for_dimensioning_product(item['type'], item['nom'])
+                        if stock_info:
+                            stock_qty = stock_info.get('quantite', 0)
+                            if stock_qty >= item['quantite']:
+                                st.success(f"Stock: {stock_qty}")
+                            elif stock_qty > 0:
+                                st.warning(f"Stock: {stock_qty}")
+                            else:
+                                st.error("Rupture")
+                        else:
+                            st.info("Non sync.")
         
 with tab3:
     st.header("☀️ Conseiller solaire")
@@ -3378,7 +3558,7 @@ if is_user_authenticated() and is_admin_user():
         st.header("⚙️ Panneau d'Administration")
         
         # Sous-onglets admin
-        admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5, admin_tab6 = st.tabs(["💰 Gestion des Prix", "🔧 Main d'œuvre", "📋 Devis Clients", "📞 Demandes Clients", "🕘 Historique", "🧮 Calculateur"])
+        admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5, admin_tab6, admin_tab7 = st.tabs(["💰 Gestion des Prix", "🔧 Main d'œuvre", "📋 Devis Clients", "📞 Demandes Clients", "🕘 Historique", "🧮 Calculateur", "📦 Gestion de Stock"])
         
         # Historique des modifications
         with admin_tab5:
@@ -5208,6 +5388,456 @@ if is_user_authenticated() and is_admin_user():
                     st.caption("💡 Analyse basée sur les données fournies - Consultez un expert pour validation")
 
             # Historique déplacé dans l'onglet Admin → 🕘 Historique
+        
+        # Onglet Gestion de Stock
+        with admin_tab7:
+            st.subheader("📦 Gestion de Stock")
+            st.caption("Gérez vos produits, clients, factures et mouvements de stock avec synchronisation Firebase.")
+            
+            # Sous-onglets pour la gestion de stock
+            stock_tab1, stock_tab2, stock_tab3, stock_tab4, stock_tab5 = st.tabs(["📊 Tableau de Bord", "📦 Produits", "👥 Clients", "📄 Factures", "📈 Mouvements"])
+            
+            # Tableau de Bord Stock
+            with stock_tab1:
+                # Affichage des alertes dans la sidebar
+                show_stock_alerts_sidebar()
+                
+                # Vue d'ensemble financière moderne
+                try:
+                    products = get_all_products_from_firebase()
+                    if products:
+                        products_list = []
+                        for product_id, product in products.items():
+                            products_list.append({
+                                'id': product_id,
+                                'nom': product.get('nom', ''),
+                                'categorie': product.get('categorie', ''),
+                                'prix_achat': product.get('prix_achat', 0),
+                                'prix_vente': product.get('prix_vente', 0),
+                                'quantite': product.get('quantite', 0),
+                                'stock_min': product.get('stock_min', 0),
+                                'unite': product.get('unite', 'pièce')
+                            })
+                        df_products = pd.DataFrame(products_list)
+                        create_financial_overview(df_products)
+                    else:
+                        st.info("Aucun produit trouvé pour l'aperçu financier")
+                except Exception as e:
+                    st.error(f"Erreur lors du chargement des données financières: {e}")
+                
+                st.markdown("---")
+                
+                # Synchronisation bidirectionnelle
+                st.subheader("🔄 Synchronisation Dimensionnement ↔ Stock")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    if st.button("📥 Importer produits du dimensionnement", help="Synchronise les produits PRIX_EQUIPEMENTS vers le stock"):
+                        with st.spinner("Synchronisation en cours..."):
+                            try:
+                                result = sync_dimensioning_to_stock()
+                                if result["success"]:
+                                    st.success(f"✅ Synchronisation réussie!")
+                                    st.info(f"• {result['new_products']} nouveaux produits ajoutés")
+                                    st.info(f"• {result['updated_products']} produits mis à jour")
+                                    st.info(f"• {result['total_products']} produits traités au total")
+                                    clear_stock_cache()
+                                else:
+                                    st.error(f"❌ Erreur: {result.get('error', 'Erreur inconnue')}")
+                            except Exception as e:
+                                st.error(f"❌ Erreur lors de la synchronisation: {e}")
+                
+                with col2:
+                    if st.button("📊 Vérifier cohérence", help="Vérifie la cohérence entre dimensionnement et stock"):
+                        with st.spinner("Vérification en cours..."):
+                            try:
+                                from sync_products import extract_products_from_dimensioning
+                                dimensioning_products = extract_products_from_dimensioning()
+                                stock_products = get_all_products_from_firebase()
+                                
+                                dim_names = {p["nom"] for p in dimensioning_products}
+                                stock_names = {p.get("nom", "") for p in stock_products.values()} if stock_products else set()
+                                
+                                missing_in_stock = dim_names - stock_names
+                                only_in_stock = stock_names - dim_names
+                                
+                                st.info(f"📊 Produits dans dimensionnement: {len(dim_names)}")
+                                st.info(f"📦 Produits dans stock: {len(stock_names)}")
+                                
+                                if missing_in_stock:
+                                    st.warning(f"⚠️ {len(missing_in_stock)} produits manquants dans le stock")
+                                    with st.expander("Voir les produits manquants"):
+                                        for product in missing_in_stock:
+                                            st.write(f"• {product}")
+                                
+                                if only_in_stock:
+                                    st.info(f"ℹ️ {len(only_in_stock)} produits uniquement dans le stock")
+                                
+                                if not missing_in_stock and not only_in_stock:
+                                    st.success("✅ Parfaite cohérence entre dimensionnement et stock!")
+                                    
+                            except Exception as e:
+                                st.error(f"❌ Erreur lors de la vérification: {e}")
+                
+                with col3:
+                    if st.button("🔄 Synchronisation complète", help="Synchronise dans les deux sens"):
+                        with st.spinner("Synchronisation complète en cours..."):
+                            try:
+                                # D'abord synchroniser dimensionnement vers stock
+                                result = sync_dimensioning_to_stock()
+                                if result["success"]:
+                                    # Puis synchroniser SQLite vers Firebase
+                                    sync_success = sync_sqlite_to_firebase()
+                                    if sync_success:
+                                        clear_stock_cache()
+                                        st.success("✅ Synchronisation complète réussie!")
+                                        st.info(f"• {result['new_products']} nouveaux produits")
+                                        st.info(f"• {result['updated_products']} produits mis à jour")
+                                    else:
+                                        st.warning("⚠️ Synchronisation partielle - Erreur SQLite→Firebase")
+                                else:
+                                    st.error(f"❌ Erreur: {result.get('error', 'Erreur inconnue')}")
+                            except Exception as e:
+                                st.error(f"❌ Erreur lors de la synchronisation: {e}")
+                
+                st.markdown("---")
+                
+                # Actions rapides
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("🔄 Synchroniser SQLite → Firebase", help="Synchronise les données locales vers Firebase"):
+                        with st.spinner("Synchronisation en cours..."):
+                            try:
+                                success = sync_sqlite_to_firebase()
+                                if success:
+                                    st.success("✅ Synchronisation réussie!")
+                                    clear_stock_cache()
+                                else:
+                                    st.error("❌ Erreur lors de la synchronisation")
+                            except Exception as e:
+                                st.error(f"❌ Erreur: {e}")
+                
+                with col2:
+                    if st.button("🗑️ Vider le cache stock", help="Force le rechargement des données depuis Firebase"):
+                        clear_stock_cache()
+                        st.success("✅ Cache vidé!")
+                
+                st.markdown("---")
+                
+                # Graphiques avancés de stock
+                try:
+                    products = get_all_products_from_firebase()
+                    if products:
+                        products_list = []
+                        for product_id, product in products.items():
+                            products_list.append({
+                                'id': product_id,
+                                'nom': product.get('nom', ''),
+                                'categorie': product.get('categorie', ''),
+                                'prix_achat': product.get('prix_achat', 0),
+                                'prix_vente': product.get('prix_vente', 0),
+                                'quantite': product.get('quantite', 0),
+                                'stock_min': product.get('stock_min', 0),
+                                'unite': product.get('unite', 'pièce')
+                            })
+                        df_products = pd.DataFrame(products_list)
+                        create_advanced_stock_chart(df_products)
+                    else:
+                        st.info("Aucun produit trouvé pour les graphiques")
+                except Exception as e:
+                    st.error(f"Erreur lors du chargement des graphiques: {e}")
+                
+                st.markdown("---")
+                
+                # Alertes stock avec cartes modernes
+                try:
+                    products = get_all_products_from_firebase()
+                    if products:
+                        low_stock_products = []
+                        for product_id, product in products.items():
+                            current_stock = product.get('stock_actuel', 0)
+                            min_stock = product.get('stock_minimum', 0)
+                            if current_stock <= min_stock:
+                                low_stock_products.append({
+                                    'product_name': product.get('nom', ''),
+                                    'current_stock': current_stock,
+                                    'min_stock': min_stock,
+                                    'category': product.get('categorie', ''),
+                                    'urgency': 'critical' if current_stock == 0 else 'warning'
+                                })
+                        
+                        if low_stock_products:
+                            st.subheader("⚠️ Alertes Stock Critiques")
+                            for alert in low_stock_products:
+                                create_stock_alert_card(alert)
+                        else:
+                            st.success("✅ Aucune alerte stock critique")
+                    
+                except Exception as e:
+                    st.error(f"❌ Erreur lors du chargement des données: {e}")
+            
+            # Gestion des Produits
+            with stock_tab2:
+                # Utiliser le tableau interactif moderne pour la gestion des produits
+                try:
+                    products = get_all_products_from_firebase()
+                    if products:
+                        products_list = []
+                        for product_id, product in products.items():
+                            products_list.append({
+                                'id': product_id,
+                                'nom': product.get('nom', ''),
+                                'categorie': product.get('categorie', ''),
+                                'prix_achat': product.get('prix_achat', 0),
+                                'prix_vente': product.get('prix_vente', 0),
+                                'quantite': product.get('quantite', 0),
+                                'stock_min': product.get('stock_min', 0),
+                                'unite': product.get('unite', 'pièce')
+                            })
+                        df_products = pd.DataFrame(products_list)
+                        create_interactive_product_table(df_products)
+                    else:
+                        st.info("Aucun produit trouvé")
+                except Exception as e:
+                    st.error(f"Erreur lors du chargement des produits: {e}")
+                
+                st.markdown("---")
+                
+                # Formulaire d'ajout de produit amélioré
+                with st.expander("➕ Ajouter un Nouveau Produit", expanded=False):
+                    with st.form("add_product"):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            nom = st.text_input("Nom du produit")
+                            categorie = st.selectbox("Catégorie", [
+                                "Panneaux Solaires", "Batteries", "Onduleurs", 
+                                "Régulateurs", "Accessoires", "Câbles", "Autres"
+                            ])
+                            prix_achat = st.number_input("Prix d'achat (FCFA)", min_value=0, step=1000)
+                            prix_vente = st.number_input("Prix de vente (FCFA)", min_value=0, step=1000)
+                        
+                        with col2:
+                            stock_initial = st.number_input("Stock initial", min_value=0, step=1)
+                            stock_minimum = st.number_input("Stock minimum", min_value=0, step=1)
+                            unite = st.selectbox("Unité", ["pièce", "mètre", "kg", "litre", "lot"])
+                            description = st.text_area("Description (optionnel)", height=100)
+                        
+                        if st.form_submit_button("➕ Ajouter le Produit", type="primary"):
+                            if nom and categorie:
+                                try:
+                                    product_data = {
+                                        'nom': nom,
+                                        'categorie': categorie,
+                                        'prix_achat': prix_achat,
+                                        'prix_vente': prix_vente,
+                                        'stock_actuel': stock_initial,
+                                        'stock_minimum': stock_minimum,
+                                        'unite': unite,
+                                        'description': description,
+                                        'date_creation': pd.Timestamp.now().isoformat()
+                                    }
+                                    
+                                    success = save_product_to_firebase(product_data)
+                                    if success:
+                                        st.success("✅ Produit ajouté avec succès!")
+                                        clear_stock_cache()
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Erreur lors de l'ajout")
+                                except Exception as e:
+                                    st.error(f"❌ Erreur: {e}")
+                            else:
+                                st.error("❌ Veuillez remplir tous les champs obligatoires")
+            
+            # Gestion des Clients
+            with stock_tab3:
+                st.subheader("👥 Gestion des Clients")
+                
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    st.markdown("**Liste des Clients**")
+                    try:
+                        clients = get_all_clients_from_firebase()
+                        if clients:
+                            clients_list = []
+                            for client_id, client in clients.items():
+                                clients_list.append({
+                                    'ID': client_id,
+                                    'Nom': client.get('nom', ''),
+                                    'Téléphone': client.get('telephone', ''),
+                                    'Email': client.get('email', ''),
+                                    'Adresse': client.get('adresse', '')
+                                })
+                            
+                            df_clients = pd.DataFrame(clients_list)
+                            st.dataframe(df_clients, use_container_width=True)
+                        else:
+                            st.info("Aucun client trouvé")
+                    except Exception as e:
+                        st.error(f"❌ Erreur: {e}")
+                
+                with col2:
+                    st.markdown("**Ajouter un Client**")
+                    with st.form("add_client"):
+                        nom = st.text_input("Nom du client")
+                        telephone = st.text_input("Téléphone")
+                        email = st.text_input("Email")
+                        adresse = st.text_area("Adresse")
+                        
+                        if st.form_submit_button("➕ Ajouter"):
+                            if nom:
+                                try:
+                                    client_data = {
+                                        'nom': nom,
+                                        'telephone': telephone,
+                                        'email': email,
+                                        'adresse': adresse,
+                                        'date_creation': pd.Timestamp.now().isoformat()
+                                    }
+                                    
+                                    success = save_client_to_firebase(client_data)
+                                    if success:
+                                        st.success("✅ Client ajouté avec succès!")
+                                        clear_stock_cache()
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Erreur lors de l'ajout")
+                                except Exception as e:
+                                    st.error(f"❌ Erreur: {e}")
+                            else:
+                                st.error("❌ Le nom du client est obligatoire")
+            
+            # Gestion des Factures - Éditeur Complet
+            with stock_tab4:
+                # Utiliser l'éditeur de factures complet
+                show_invoice_editor()
+            
+            # Mouvements de Stock
+            with stock_tab5:
+                # Timeline moderne des mouvements
+                try:
+                    movements = get_stock_movements_from_firebase()
+                    if movements:
+                        movements_list = []
+                        for movement_id, movement in movements.items():
+                            movements_list.append({
+                                'id': movement_id,
+                                'produit_nom': movement.get('produit_nom', ''),
+                                'type': movement.get('type', ''),
+                                'quantite': movement.get('quantite', 0),
+                                'date': movement.get('date', ''),
+                                'motif': movement.get('motif', ''),
+                                'stock_apres': movement.get('stock_apres', 0)
+                            })
+                        df_movements = pd.DataFrame(movements_list)
+                        create_movement_timeline(df_movements)
+                    else:
+                        st.info("Aucun mouvement trouvé")
+                except Exception as e:
+                    st.error(f"Erreur lors du chargement des mouvements: {e}")
+                
+                st.markdown("---")
+                
+                # Formulaire d'enregistrement de mouvement amélioré
+                with st.expander("📝 Enregistrer un Nouveau Mouvement", expanded=False):
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.markdown("**Historique Récent**")
+                        try:
+                            movements = get_stock_movements_from_firebase()
+                            if movements:
+                                # Afficher les 5 derniers mouvements
+                                movements_list = []
+                                for movement_id, movement in movements.items():
+                                    movements_list.append({
+                                        'Produit': movement.get('produit_nom', ''),
+                                        'Type': movement.get('type', ''),
+                                        'Quantité': movement.get('quantite', 0),
+                                        'Date': movement.get('date', ''),
+                                        'Motif': movement.get('motif', ''),
+                                        'Stock Après': movement.get('stock_apres', 0)
+                                    })
+                                
+                                # Trier par date et prendre les 5 derniers
+                                df_movements = pd.DataFrame(movements_list)
+                                df_movements = df_movements.sort_values('Date', ascending=False).head(5)
+                                st.dataframe(df_movements, use_container_width=True, hide_index=True)
+                            else:
+                                st.info("Aucun mouvement trouvé")
+                        except Exception as e:
+                            st.error(f"❌ Erreur: {e}")
+                    
+                    with col2:
+                        st.markdown("**Nouveau Mouvement**")
+                    try:
+                        products = get_all_products_from_firebase()
+                        if products:
+                            with st.form("add_movement"):
+                                # Sélection du produit
+                                product_options = {f"{product.get('nom', '')} (Stock: {product.get('stock_actuel', 0)})": product_id 
+                                                 for product_id, product in products.items()}
+                                selected_product_display = st.selectbox("Produit", list(product_options.keys()))
+                                selected_product_id = product_options[selected_product_display] if selected_product_display else None
+                                
+                                type_mouvement = st.selectbox("Type de mouvement", ["Entrée", "Sortie"])
+                                quantite = st.number_input("Quantité", min_value=1, step=1)
+                                motif = st.text_input("Motif", placeholder="Ex: Achat, Vente, Ajustement...")
+                                
+                                if st.form_submit_button("📝 Enregistrer"):
+                                    if selected_product_id and quantite > 0 and motif:
+                                        try:
+                                            # Récupérer les infos du produit
+                                            product = products[selected_product_id]
+                                            stock_actuel = product.get('stock_actuel', 0)
+                                            
+                                            # Vérifier le stock pour les sorties
+                                            if type_mouvement == "Sortie" and quantite > stock_actuel:
+                                                st.error(f"❌ Stock insuffisant! Stock actuel: {stock_actuel}")
+                                            else:
+                                                # Calculer le nouveau stock
+                                                if type_mouvement == "Entrée":
+                                                    nouveau_stock = stock_actuel + quantite
+                                                else:
+                                                    nouveau_stock = stock_actuel - quantite
+                                                
+                                                # Enregistrer le mouvement
+                                                movement_data = {
+                                                    'produit_id': selected_product_id,
+                                                    'produit_nom': product.get('nom', ''),
+                                                    'type': type_mouvement,
+                                                    'quantite': quantite,
+                                                    'stock_avant': stock_actuel,
+                                                    'stock_apres': nouveau_stock,
+                                                    'motif': motif,
+                                                    'date': pd.Timestamp.now().isoformat(),
+                                                    'utilisateur': st.session_state.get('user_email', '')
+                                                }
+                                                
+                                                success_movement = save_stock_movement_to_firebase(movement_data)
+                                                
+                                                # Mettre à jour le stock du produit
+                                                product_update = {**product, 'stock_actuel': nouveau_stock}
+                                                success_product = update_product_in_firebase(selected_product_id, product_update)
+                                                
+                                                if success_movement and success_product:
+                                                    st.success("✅ Mouvement enregistré avec succès!")
+                                                    clear_stock_cache()
+                                                    st.rerun()
+                                                else:
+                                                    st.error("❌ Erreur lors de l'enregistrement")
+                                        except Exception as e:
+                                            st.error(f"❌ Erreur: {e}")
+                                    else:
+                                        st.error("❌ Veuillez remplir tous les champs")
+                        else:
+                            st.info("Aucun produit disponible. Ajoutez d'abord des produits.")
+                    except Exception as e:
+                        st.error(f"❌ Erreur: {e}")
 
 st.markdown("---")
 
