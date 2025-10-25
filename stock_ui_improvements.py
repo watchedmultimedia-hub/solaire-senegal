@@ -390,19 +390,47 @@ def show_stock_alerts_sidebar():
     with st.sidebar:
         st.markdown("### 🚨 Alertes Stock")
         
-        # Ici on récupérerait les vrais produits en alerte
-        # Pour l'exemple, on simule quelques alertes
-        alerts = [
-            {"nom": "Panneau 400W", "stock": 0, "min": 5, "type": "rupture"},
-            {"nom": "Batterie Lithium 100Ah", "stock": 2, "min": 5, "type": "faible"},
-            {"nom": "Onduleur 3000W", "stock": 1, "min": 3, "type": "faible"}
-        ]
-        
-        for alert in alerts:
-            if alert["type"] == "rupture":
-                st.error(f"🚨 {alert['nom']}: Rupture de stock")
-            else:
-                st.warning(f"⚠️ {alert['nom']}: Stock faible ({alert['stock']}/{alert['min']})")
-        
-        if not alerts:
-            st.success("✅ Aucune alerte de stock")
+        try:
+            # Importer la fonction pour récupérer les produits depuis Firebase
+            from firebase_config import get_all_products_from_firebase
+            
+            # Récupérer les vrais produits depuis Firebase
+            products = get_all_products_from_firebase()
+            alerts = []
+            
+            if products:
+                for product_id, product in products.items():
+                    stock_actuel = product.get('stock_actuel', 0)
+                    stock_min = product.get('stock_minimum', product.get('stock_min', 0))
+                    nom = product.get('nom', 'Produit sans nom')
+                    
+                    # Vérifier les conditions d'alerte
+                    if stock_actuel == 0:
+                        alerts.append({
+                            "nom": nom,
+                            "stock": stock_actuel,
+                            "min": stock_min,
+                            "type": "rupture"
+                        })
+                    elif stock_actuel <= stock_min and stock_min > 0:
+                        alerts.append({
+                            "nom": nom,
+                            "stock": stock_actuel,
+                            "min": stock_min,
+                            "type": "faible"
+                        })
+            
+            # Afficher les alertes
+            for alert in alerts:
+                if alert["type"] == "rupture":
+                    st.error(f"🚨 {alert['nom']}: Rupture de stock")
+                else:
+                    st.warning(f"⚠️ {alert['nom']}: Stock faible ({alert['stock']}/{alert['min']})")
+            
+            if not alerts:
+                st.success("✅ Aucune alerte de stock")
+                
+        except Exception as e:
+            st.error(f"Erreur lors du chargement des alertes: {e}")
+            # Fallback en cas d'erreur
+            st.info("Impossible de charger les alertes de stock")
