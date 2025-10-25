@@ -3518,7 +3518,7 @@ Pour plus d'informations : energiesolairesenegal.com
                         with col_detail3:
                             stock_info = get_stock_for_dimensioning_product(item['nom'])
                             if stock_info:
-                                stock_qty = stock_info.get('quantite', 0)
+                                stock_qty = stock_info.get('stock_actuel', 0)
                                 if stock_qty >= item['quantite']:
                                     st.success(f"Stock: {stock_qty}")
                                 elif stock_qty > 0:
