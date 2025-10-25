@@ -687,6 +687,40 @@ def update_product_in_firebase(product_id, product_data):
         st.error(f"Erreur mise à jour produit: {e}")
         return False
 
+def delete_product_from_firebase(product_id):
+    """Supprime un produit de Firestore"""
+    try:
+        db = init_firebase_admin()
+        if db:
+            doc_ref = db.collection('stock_products').document(product_id)
+            
+            # Récupérer les données avant suppression pour le log
+            try:
+                snap_before = doc_ref.get()
+                before_doc = snap_before.to_dict() if snap_before.exists else None
+            except Exception:
+                before_doc = None
+            
+            # Supprimer le document
+            doc_ref.delete()
+            
+            # Journaliser la suppression
+            try:
+                log_change(
+                    event_type='stock.product.delete',
+                    item_id=product_id,
+                    description=f'Suppression du produit: {before_doc.get("nom", "Inconnu") if before_doc else "Inconnu"}',
+                    before=before_doc,
+                    after=None,
+                    metadata={'collection': 'stock_products'}
+                )
+            except Exception:
+                pass
+            return True
+    except Exception as e:
+        st.error(f"Erreur suppression produit: {e}")
+        return False
+
 def save_client_to_firebase(client_data):
     """Sauvegarde un client dans Firestore"""
     try:
