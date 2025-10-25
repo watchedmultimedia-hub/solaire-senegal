@@ -168,10 +168,16 @@ def get_stock_for_dimensioning_product(product_name):
         if not products or not isinstance(products, dict):
             return None
             
-        # Itérer sur les valeurs du dictionnaire (products est {doc.id: doc.to_dict()})
-        product = next((p for p in products.values() if isinstance(p, dict) and p.get("nom") == product_name), None)
+        # Itérer sur les valeurs du dictionnaire en évitant toute opération sur des types non-dict
+        product = None
+        for p in products.values():
+            if isinstance(p, dict):
+                nom = p.get("nom", None)
+                if nom == product_name:
+                    product = p
+                    break
         
-        if product:
+        if isinstance(product, dict):
             stock_actuel = product.get("stock_actuel")
             if stock_actuel is None:
                 stock_actuel = product.get("quantite", product.get("stock_initial", 0))
@@ -204,15 +210,20 @@ def update_stock_after_quote(products_used):
             product_name = used_product["nom"]
             quantity_used = used_product["quantite"]
             
-            # Trouver le produit dans le stock (itérer sur les valeurs du dictionnaire)
-            existing_item = next(((pid, pdata) for pid, pdata in existing_products.items() 
-                                  if isinstance(pdata, dict) and pdata.get("nom") == product_name), None)
+            # Trouver le produit dans le stock de manière sûre
+            existing_item = None
+            for pid, pdata in existing_products.items():
+                if isinstance(pdata, dict):
+                    nom = pdata.get("nom", None)
+                    if nom == product_name:
+                        existing_item = (pid, pdata)
+                        break
             
             if existing_item:
                 prod_id, stock_product = existing_item
-                if stock_product and stock_product.get("stock_actuel", 0) >= quantity_used:
+                if isinstance(stock_product, dict) and stock_product.get("stock_actuel", 0) >= quantity_used:
                     # Décrémenter le stock
-                    new_stock = stock_product["stock_actuel"] - quantity_used
+                    new_stock = stock_product.get("stock_actuel", 0) - quantity_used
                     stock_product["stock_actuel"] = new_stock
                     
                     # Mettre à jour dans Firebase
@@ -260,10 +271,16 @@ def check_stock_availability(products_needed):
             product_name = needed_product["nom"]
             quantity_needed = needed_product["quantite"]
             
-            # Itérer sur les valeurs du dictionnaire (existing_products est {doc.id: doc.to_dict()})
-            stock_product = next((p for p in existing_products.values() if isinstance(p, dict) and p.get("nom") == product_name), None)
+            # Itérer sur les valeurs du dictionnaire en évitant .get sur des types non-dict
+            stock_product = None
+            for p in existing_products.values():
+                if isinstance(p, dict):
+                    nom = p.get("nom", None)
+                    if nom == product_name:
+                        stock_product = p
+                        break
             
-            if not stock_product:
+            if not isinstance(stock_product, dict):
                 missing_products.append({
                     "nom": product_name,
                     "quantite_demandee": quantity_needed,
