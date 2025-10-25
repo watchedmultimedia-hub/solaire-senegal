@@ -136,7 +136,7 @@ class InvoiceEditor:
             with col2:
                 if selected_product == "Service personnalisé...":
                     description = st.text_input("Description", key="new_desc")
-                    unit_price = st.number_input("Prix unitaire (FCFA)", min_value=0.0, key="new_price")
+                    unit_price = st.number_input("Prix unitaire (FCFA)", min_value=0.0, step=1.0, key="new_price")
                 else:
                     product_data = next((p for p in products_list if p.get('nom') == selected_product), None)
                     description = selected_product
@@ -144,7 +144,7 @@ class InvoiceEditor:
                     st.write(f"Prix: {unit_price:,.0f} FCFA")
             
             with col3:
-                quantity = st.number_input("Quantité", min_value=0.0, value=1.0, key="new_qty")
+                quantity = st.number_input("Quantité", min_value=0.0, value=1.0, step=1.0, key="new_qty")
             
             with col4:
                 st.write("Total")
@@ -191,11 +191,11 @@ class InvoiceEditor:
                 st.write("### Totaux")
                 
                 # TVA
-                tva_rate = st.number_input("TVA (%)", min_value=0.0, max_value=100.0, value=18.0)
+                tva_rate = st.number_input("TVA (%)", min_value=0.0, max_value=100.0, value=18.0, step=0.1)
                 tva_amount = subtotal * (tva_rate / 100)
                 
                 # Remise
-                discount_rate = st.number_input("Remise (%)", min_value=0.0, max_value=100.0, value=0.0)
+                discount_rate = st.number_input("Remise (%)", min_value=0.0, max_value=100.0, value=0.0, step=0.1)
                 discount_amount = subtotal * (discount_rate / 100)
                 
                 # Calculs finaux
