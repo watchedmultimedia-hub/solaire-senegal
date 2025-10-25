@@ -284,53 +284,97 @@ def main():
                         st.error("Le nom du produit est obligatoire")
         
         with tab3:
+            st.subheader("Modifier un Produit")
+            
             produits_df = obtenir_produits()
             if not produits_df.empty:
-                # Sélection du produit à modifier
-                produit_noms = produits_df['nom'].tolist()
-                produit_choisi = st.selectbox("Sélectionner le produit à modifier", produit_noms)
+                # Étape 1: Sélection de la catégorie
+                categories_disponibles = sorted(produits_df['categorie'].unique().tolist())
+                categorie_selectionnee = st.selectbox(
+                    "🏷️ Étape 1: Choisissez une catégorie", 
+                    [""] + categories_disponibles,
+                    help="Sélectionnez d'abord la catégorie pour filtrer les produits"
+                )
                 
-                if produit_choisi:
-                    # Récupérer les informations du produit sélectionné
-                    produit_info = produits_df[produits_df['nom'] == produit_choisi].iloc[0]
+                if categorie_selectionnee:
+                    # Étape 2: Sélection du produit dans la catégorie
+                    produits_filtres = produits_df[produits_df['categorie'] == categorie_selectionnee]
+                    produits_noms = produits_filtres['nom'].tolist()
                     
-                    with st.form("form_modifier_produit"):
-                        col1, col2 = st.columns(2)
+                    produit_choisi = st.selectbox(
+                        f"📦 Étape 2: Choisissez un produit dans '{categorie_selectionnee}'",
+                        [""] + produits_noms,
+                        help=f"{len(produits_noms)} produit(s) disponible(s) dans cette catégorie"
+                    )
+                    
+                    if produit_choisi:
+                        # Étape 3: Modification du produit sélectionné
+                        st.markdown(f"### ✏️ Étape 3: Modifier '{produit_choisi}'")
                         
-                        with col1:
-                            nom_modif = st.text_input("Nom du produit *", value=produit_info['nom'])
-                            categorie_modif = st.selectbox("Catégorie", 
-                                ["Panneau Solaire", "Batterie", "Onduleur", "Régulateur", 
-                                 "Câbles", "Accessoires", "Autre"],
-                                index=["Panneau Solaire", "Batterie", "Onduleur", "Régulateur", 
-                                       "Câbles", "Accessoires", "Autre"].index(produit_info['categorie']) 
-                                      if produit_info['categorie'] in ["Panneau Solaire", "Batterie", "Onduleur", "Régulateur", 
-                                                                        "Câbles", "Accessoires", "Autre"] else 0)
-                            prix_achat_modif = st.number_input("Prix d'achat (FCFA)", min_value=0.0, step=1000.0, 
-                                                             value=float(produit_info['prix_achat']))
-                            prix_vente_modif = st.number_input("Prix de vente (FCFA)", min_value=0.0, step=1000.0, 
-                                                             value=float(produit_info['prix_vente']))
+                        # Récupérer les informations du produit sélectionné
+                        produit_info = produits_df[produits_df['nom'] == produit_choisi].iloc[0]
                         
-                        with col2:
-                            stock_modif = st.number_input("Stock actuel", min_value=0, step=1, 
-                                                        value=int(produit_info['stock_actuel']))
-                            stock_min_modif = st.number_input("Stock minimum (alerte)", min_value=0, step=1, 
-                                                            value=int(produit_info['stock_min']))
-                            unite_modif = st.selectbox("Unité", ["Pièce", "Mètre", "Lot", "Kit"],
-                                                     index=["Pièce", "Mètre", "Lot", "Kit"].index(produit_info['unite']) 
-                                                           if produit_info['unite'] in ["Pièce", "Mètre", "Lot", "Kit"] else 0)
+                        # Afficher les informations actuelles
+                        with st.expander("📋 Informations actuelles", expanded=False):
+                            col_info1, col_info2 = st.columns(2)
+                            with col_info1:
+                                st.write(f"**Nom:** {produit_info['nom']}")
+                                st.write(f"**Catégorie:** {produit_info['categorie']}")
+                                st.write(f"**Prix d'achat:** {produit_info['prix_achat']:,.0f} FCFA")
+                            with col_info2:
+                                st.write(f"**Prix de vente:** {produit_info['prix_vente']:,.0f} FCFA")
+                                st.write(f"**Stock actuel:** {produit_info['stock_actuel']}")
+                                st.write(f"**Stock minimum:** {produit_info['stock_min']}")
                         
-                        submitted_modif = st.form_submit_button("💾 Modifier le produit", type="primary")
-                        
-                        if submitted_modif:
-                            if nom_modif:
-                                modifier_produit(produit_info['id'], nom_modif, categorie_modif, 
-                                               prix_achat_modif, prix_vente_modif, stock_modif, 
-                                               stock_min_modif, unite_modif)
-                                st.success(f"✅ Produit '{nom_modif}' modifié avec succès!")
-                                st.rerun()
-                            else:
-                                st.error("Le nom du produit est obligatoire")
+                        # Formulaire de modification
+                        with st.form("form_modifier_produit"):
+                            st.markdown("#### 🔧 Modifier les informations")
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                nom_modif = st.text_input("Nom du produit *", value=produit_info['nom'])
+                                categorie_modif = st.selectbox("Catégorie", 
+                                    ["Panneau Solaire", "Batterie", "Onduleur", "Régulateur", 
+                                     "Câbles", "Accessoires", "Autre"],
+                                    index=["Panneau Solaire", "Batterie", "Onduleur", "Régulateur", 
+                                           "Câbles", "Accessoires", "Autre"].index(produit_info['categorie']) 
+                                          if produit_info['categorie'] in ["Panneau Solaire", "Batterie", "Onduleur", "Régulateur", 
+                                                                            "Câbles", "Accessoires", "Autre"] else 0)
+                                prix_achat_modif = st.number_input("Prix d'achat (FCFA)", min_value=0.0, step=1000.0, 
+                                                                 value=float(produit_info['prix_achat'] or 0))
+                                prix_vente_modif = st.number_input("Prix de vente (FCFA)", min_value=0.0, step=1000.0, 
+                                                                 value=float(produit_info['prix_vente'] or 0))
+                            
+                            with col2:
+                                stock_modif = st.number_input("Stock actuel", min_value=0, step=1, 
+                                                            value=int(produit_info['stock_actuel'] or 0))
+                                stock_min_modif = st.number_input("Stock minimum (alerte)", min_value=0, step=1, 
+                                                                value=int(produit_info['stock_min'] or 0))
+                                unite_modif = st.selectbox("Unité", ["Pièce", "Mètre", "Lot", "Kit"],
+                                                         index=["Pièce", "Mètre", "Lot", "Kit"].index(produit_info['unite']) 
+                                                               if produit_info['unite'] in ["Pièce", "Mètre", "Lot", "Kit"] else 0)
+                            
+                            # Calcul automatique de la marge
+                            if prix_achat_modif > 0 and prix_vente_modif > 0:
+                                marge = ((prix_vente_modif - prix_achat_modif) / prix_achat_modif) * 100
+                                st.info(f"💰 Marge bénéficiaire: {marge:.1f}%")
+                            
+                            submitted_modif = st.form_submit_button("💾 Modifier le produit", type="primary")
+                            
+                            if submitted_modif:
+                                if nom_modif:
+                                    modifier_produit(produit_info['id'], nom_modif, categorie_modif, 
+                                                   prix_achat_modif, prix_vente_modif, stock_modif, 
+                                                   stock_min_modif, unite_modif)
+                                    st.success(f"✅ Produit '{nom_modif}' modifié avec succès!")
+                                    st.rerun()
+                                else:
+                                    st.error("Le nom du produit est obligatoire")
+                    else:
+                        st.info("👆 Sélectionnez un produit pour le modifier")
+                else:
+                    st.info("👆 Commencez par sélectionner une catégorie")
             else:
                 st.info("Aucun produit disponible pour modification. Ajoutez d'abord des produits!")
     
