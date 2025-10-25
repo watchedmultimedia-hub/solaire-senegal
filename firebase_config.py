@@ -647,10 +647,10 @@ def get_all_products_from_firebase():
         db = init_firebase_admin()
         if db:
             products = db.collection('stock_products').stream()
-            return [{'id': doc.id, **doc.to_dict()} for doc in products]
+            return {doc.id: doc.to_dict() for doc in products}
     except Exception as e:
         st.error(f"Erreur récupération produits: {e}")
-        return []
+        return {}
 
 def update_product_in_firebase(product_id, product_data):
     """Met à jour un produit dans Firestore"""
