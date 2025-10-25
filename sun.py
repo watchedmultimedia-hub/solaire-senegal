@@ -731,9 +731,9 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
     
     # Filtrage des onduleurs selon le voltage système
     if voltage_systeme == "High Voltage":
-        # Pour High Voltage, prendre les onduleurs avec voltage > 180V
+        # Pour High Voltage, prendre les onduleurs avec voltage >= 180V
         onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
-                            if type_onduleur == v["type"] and v["voltage"] > 180 and v.get("phase", "monophase") == phase_type}
+                            if type_onduleur == v["type"] and v["voltage"] >= 180 and v.get("phase", "monophase") == phase_type}
     else:
         # Pour les voltages standards, filtrage exact
         onduleurs_filtres = {k: v for k, v in prix_equipements["onduleurs"].items() 
@@ -763,7 +763,7 @@ def selectionner_equipements(dimensionnement, choix_utilisateur):
             for type_compatible in types_compatibles:
                 if voltage_systeme == "High Voltage":
                     onduleurs_compatibles = {k: v for k, v in prix_equipements["onduleurs"].items() 
-                                           if type_compatible == v["type"] and v["voltage"] > 180 and v.get("phase", "monophase") == phase_type}
+                                           if type_compatible == v["type"] and v["voltage"] >= 180 and v.get("phase", "monophase") == phase_type}
                 else:
                     onduleurs_compatibles = {k: v for k, v in prix_equipements["onduleurs"].items() 
                                            if type_compatible == v["type"] and v["voltage"] == voltage_systeme and v.get("phase", "monophase") == phase_type}
@@ -3740,48 +3740,119 @@ if is_user_authenticated() and is_admin_user():
             st.markdown("---")
             st.markdown("### ➕ Ajouter un nouvel article")
             
+            # Affichage d'informations contextuelles selon la catégorie
+            if selected_category == "batteries":
+                st.info("""
+                💡 **Guide des types de batteries :**
+                - **Plomb/AGM/GEL** : Capacité en Ah (Ampères-heures)
+                - **Lithium** : Capacité en Ah pour 12V-24V
+                - **Lithium HV** : Capacité en kWh (kilowatts-heures) pour 48V+
+                """)
+            elif selected_category == "panneaux":
+                st.info("💡 **Panneaux solaires** : Spécifiez la puissance en Watts et le type de technologie")
+            elif selected_category == "onduleurs":
+                st.info("💡 **Onduleurs** : Choisissez le type selon l'usage (Off-Grid, Hybride, Online)")
+            elif selected_category == "regulateurs":
+                st.info("💡 **Régulateurs** : MPPT sont plus efficaces que PWM (+30% de rendement)")
+            
             with st.form(f"add_item_{selected_category}"):
-                new_name = st.text_input("Nom de l'article")
+                new_name = st.text_input("Nom de l'article", help="Nom descriptif de l'équipement (ex: 'Lithium HV 5.2kWh 48V')")
                 
                 if selected_category == "panneaux":
-                    new_puissance = st.number_input("Puissance (W)", min_value=0, step=10)
-                    new_type = st.selectbox("Type", ["Polycristallin", "Monocristallin"]) 
-                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        new_puissance = st.number_input("Puissance (W)", min_value=0, step=10, help="Puissance crête en Watts")
+                        new_type = st.selectbox("Type", ["Polycristallin", "Monocristallin"], 
+                                               help="Monocristallin = meilleur rendement, Polycristallin = plus économique") 
+                    with col2:
+                        new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000, help="Prix de vente en FCFA")
+                        # Calcul automatique du prix par Watt
+                        if new_puissance > 0 and new_price > 0:
+                            prix_par_watt = new_price / new_puissance
+                            st.caption(f"💰 Prix par Watt: {prix_par_watt:.0f} FCFA/W")
+                    
                     new_item = {
                         "puissance": int(new_puissance),
                         "type": new_type,
                         "prix": int(new_price)
                     }
-                elif selected_category == "batteries":
-                    new_voltage = st.number_input("Voltage (V)", min_value=0, step=12)
-                    new_type = st.selectbox("Type", ["Plomb", "AGM", "GEL", "Lithium", "Lithium HV"], 
-                                          help="Choisissez 'Lithium' pour voltage standard (12V-24V) ou 'Lithium HV' pour haute tension (48V+)",
-                                          key="battery_type_add") 
                     
-                    # Champs de capacité conditionnels selon le type de batterie
+                elif selected_category == "batteries":
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        new_voltage = st.number_input("Voltage (V)", min_value=0, step=12, value=12, 
+                                                    help="Tension nominale de la batterie")
+                        battery_types = ["Plomb", "AGM", "GEL", "Lithium", "Lithium HV"]
+                        new_type = st.selectbox("Type", battery_types, 
+                                              help="Choisissez selon l'usage : Plomb (économique), AGM/GEL (sans entretien), Lithium (haute performance), Lithium HV (très haute performance)",
+                                              key="battery_type_add") 
+                    
+                    with col2:
+                        new_cycles = st.number_input("Cycles de vie", min_value=0, step=100, value=500,
+                                                   help="Nombre de cycles charge/décharge")
+                        new_decharge = st.number_input("Décharge max (%)", min_value=0, max_value=100, step=5, value=50,
+                                                     help="Pourcentage de décharge maximale recommandée")
+                    
+                    # Section capacité avec logique conditionnelle améliorée
+                    st.markdown("**Capacité de la batterie :**")
                     new_capacite = 0
                     new_kwh = None
                     
-                    # Utilisation d'un container pour forcer le rafraîchissement
-                    capacity_container = st.container()
-                    
-                    with capacity_container:
-                        if new_type == "Lithium HV":
-                            new_kwh = st.number_input("Capacité (kWh)", min_value=0.0, step=0.1, 
-                                                    help="Pour les batteries haute tension, spécifiez la capacité en kWh",
+                    if new_type == "Lithium HV":
+                        # Pour Lithium HV : priorité aux kWh
+                        col_kwh, col_info = st.columns([2, 1])
+                        with col_kwh:
+                            new_kwh = st.number_input("Capacité (kWh)", min_value=0.0, step=0.1, value=4.8,
+                                                    help="Capacité énergétique en kilowatts-heures",
                                                     key=f"battery_kwh_add_{new_type}")
-                            st.info("💡 Les batteries Lithium HV sont spécifiées en kWh plutôt qu'en Ah")
-                            # Calcul automatique des Ah équivalents pour la compatibilité
-                            if new_kwh > 0 and new_voltage > 0:
-                                new_capacite = int((new_kwh * 1000) / new_voltage)
-                                st.caption(f"Équivalent: ~{new_capacite} Ah à {new_voltage}V")
+                        with col_info:
+                            st.markdown("""
+                            <div style="background: #E3F2FD; padding: 10px; border-radius: 5px; margin-top: 25px;">
+                                <small><strong>💡 Lithium HV</strong><br>
+                                Spécification en kWh<br>
+                                (plus précise que Ah)</small>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        # Calcul automatique des Ah équivalents
+                        if new_kwh > 0 and new_voltage > 0:
+                            new_capacite = int((new_kwh * 1000) / new_voltage)
+                            st.success(f"✅ Équivalent calculé: ~{new_capacite} Ah à {new_voltage}V")
                         else:
-                            new_capacite = st.number_input("Capacité (Ah)", min_value=0, step=10,
+                            st.warning("⚠️ Veuillez renseigner la capacité en kWh et le voltage")
+                    else:
+                        # Pour autres types : priorité aux Ah
+                        col_ah, col_info = st.columns([2, 1])
+                        with col_ah:
+                            new_capacite = st.number_input("Capacité (Ah)", min_value=0, step=10, value=100,
+                                                         help="Capacité en Ampères-heures",
                                                          key=f"battery_ah_add_{new_type}")
+                        with col_info:
+                            st.markdown(f"""
+                            <div style="background: #E8F5E8; padding: 10px; border-radius: 5px; margin-top: 25px;">
+                                <small><strong>💡 {new_type}</strong><br>
+                                Spécification en Ah<br>
+                                (standard du marché)</small>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        # Calcul automatique des kWh équivalents
+                        if new_capacite > 0 and new_voltage > 0:
+                            kwh_equivalent = (new_capacite * new_voltage) / 1000
+                            st.info(f"💡 Équivalent énergétique: ~{kwh_equivalent:.1f} kWh à {new_voltage}V")
                     
-                    new_cycles = st.number_input("Cycles", min_value=0, step=100)
-                    new_decharge = st.number_input("Décharge max (%)", min_value=0, max_value=100, step=5)
-                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
+                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000, help="Prix de vente en FCFA")
+                    
+                    # Calcul du prix par kWh pour comparaison
+                    if new_price > 0:
+                        if new_type == "Lithium HV" and new_kwh and new_kwh > 0:
+                            prix_par_kwh = new_price / new_kwh
+                            st.caption(f"💰 Prix par kWh: {prix_par_kwh:,.0f} FCFA/kWh")
+                        elif new_capacite > 0 and new_voltage > 0:
+                            kwh_calc = (new_capacite * new_voltage) / 1000
+                            if kwh_calc > 0:
+                                prix_par_kwh = new_price / kwh_calc
+                                st.caption(f"💰 Prix par kWh: {prix_par_kwh:,.0f} FCFA/kWh")
                     
                     new_item = {
                         "capacite": int(new_capacite),
@@ -3796,12 +3867,41 @@ if is_user_authenticated() and is_admin_user():
                     if new_type == "Lithium HV" and new_kwh is not None:
                         new_item["kwh"] = float(new_kwh)
                 elif selected_category == "onduleurs":
-                    new_puissance = st.number_input("Puissance (W)", min_value=0, step=100)
-                    new_voltage = st.number_input("Voltage (V)", min_value=0, step=12)
-                    new_type = st.selectbox("Type", ["Off-Grid", "Hybride", "Online", "Online Tri"]) 
-                    new_phase = st.selectbox("Phase", ["monophase", "triphase"], help="Monophasé pour usage domestique, Triphasé pour usage industriel")
-                    new_mppt = st.text_input("MPPT (optionnel)")
-                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        new_puissance = st.number_input("Puissance (W)", min_value=0, step=100, value=1000,
+                                                      help="Puissance de sortie continue en Watts")
+                        new_voltage = st.number_input("Voltage entrée (V)", min_value=0, step=12, value=12,
+                                                    help="Tension d'entrée DC (batterie)")
+                        onduleur_types = ["Off-Grid", "Hybride", "Online", "Online Tri"]
+                        new_type = st.selectbox("Type", onduleur_types,
+                                              help="Off-Grid: autonome, Hybride: réseau+batterie, Online: UPS") 
+                    with col2:
+                        phase_options = ["monophase", "triphase"]
+                        new_phase = st.selectbox("Phase", phase_options, 
+                                               help="Monophasé: usage domestique, Triphasé: usage industriel")
+                        new_mppt = st.text_input("MPPT (optionnel)", placeholder="ex: 60A",
+                                                help="Courant MPPT intégré (pour onduleurs hybrides)")
+                        new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000, help="Prix de vente en FCFA")
+                    
+                    # Calculs d'information utiles
+                    if new_puissance > 0:
+                        if new_price > 0:
+                            prix_par_watt = new_price / new_puissance
+                            st.caption(f"💰 Prix par Watt: {prix_par_watt:.0f} FCFA/W")
+                        
+                        if new_voltage > 0:
+                            courant_entree = new_puissance / new_voltage
+                            st.info(f"⚡ Courant d'entrée estimé: ~{courant_entree:.1f}A à {new_voltage}V")
+                            
+                            # Recommandations selon le type
+                            if new_type == "Hybride":
+                                st.success(f"🔋 Idéal pour systèmes avec réseau électrique + batteries")
+                            elif new_type == "Off-Grid":
+                                st.info(f"🏠 Parfait pour sites isolés sans réseau électrique")
+                            elif new_type in ["Online", "Online Tri"]:
+                                st.warning(f"🏢 Recommandé pour applications critiques (UPS)")
+                    
                     new_item = {
                         "puissance": int(new_puissance),
                         "voltage": int(new_voltage),
@@ -3811,10 +3911,44 @@ if is_user_authenticated() and is_admin_user():
                         "prix": int(new_price)
                     }
                 elif selected_category == "regulateurs":
-                    new_amperage = st.number_input("Ampérage (A)", min_value=0, step=5)
-                    new_type = st.selectbox("Type", ["PWM", "MPPT"]) 
-                    new_voltage_max = st.number_input("Voltage max (V)", min_value=0, step=12)
-                    new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        new_amperage = st.number_input("Ampérage (A)", min_value=0, step=5, value=30,
+                                                     help="Courant maximum de charge en Ampères")
+                        regulateur_types = ["PWM", "MPPT"]
+                        new_type = st.selectbox("Type", regulateur_types,
+                                              help="MPPT: +30% efficacité vs PWM, PWM: plus économique")
+                    with col2:
+                        new_voltage_max = st.number_input("Voltage max (V)", min_value=0, step=12, value=100,
+                                                        help="Tension maximale d'entrée des panneaux")
+                        new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000, help="Prix de vente en FCFA")
+                    
+                    # Calculs d'information utiles
+                    if new_amperage > 0:
+                        # Estimation de la puissance pour différents voltages système
+                        st.markdown("**💡 Puissance maximale recommandée :**")
+                        col_12v, col_24v, col_48v = st.columns(3)
+                        
+                        with col_12v:
+                            puissance_12v = new_amperage * 12
+                            st.metric("12V", f"{puissance_12v}W")
+                        with col_24v:
+                            puissance_24v = new_amperage * 24
+                            st.metric("24V", f"{puissance_24v}W")
+                        with col_48v:
+                            puissance_48v = new_amperage * 48
+                            st.metric("48V", f"{puissance_48v}W")
+                        
+                        if new_type == "MPPT":
+                            puissance_panneau_max = max(puissance_12v, puissance_24v, puissance_48v) * 1.3
+                            st.success(f"🔋 Avec MPPT: Panneaux jusqu'à {puissance_panneau_max:.0f}W possibles (+30% efficacité)")
+                        else:
+                            st.info(f"🔋 Avec PWM: Respecter la tension batterie = tension panneaux")
+                    
+                    if new_price > 0 and new_amperage > 0:
+                        prix_par_ampere = new_price / new_amperage
+                        st.caption(f"💰 Prix par Ampère: {prix_par_ampere:.0f} FCFA/A")
+                    
                     new_item = {
                         "amperage": int(new_amperage),
                         "type": new_type,
@@ -3825,23 +3959,108 @@ if is_user_authenticated() and is_admin_user():
                     new_price = st.number_input("Prix (FCFA)", min_value=0, step=1000)
                     new_item = {"prix": int(new_price)}
                 
-                add_submit = st.form_submit_button("➕ Ajouter l'article")
+                add_submit = st.form_submit_button("➕ Ajouter l'article", type="primary")
                 if add_submit:
+                    # Validation du nom
                     if not new_name or len(new_name.strip()) < 2:
-                        st.warning("⚠️ Veuillez renseigner un nom d'article valide")
-                    elif selected_category == "onduleurs" and new_item.get("puissance", 0) <= 0:
-                        st.warning("⚠️ La puissance de l'onduleur doit être supérieure à 0")
-                    else:
-                        updated_prices = current_prices.copy()
-                        if selected_category not in updated_prices:
-                            updated_prices[selected_category] = {}
-                        updated_prices[selected_category][new_name] = new_item
-                        if save_equipment_prices(updated_prices):
-                            st.success(f"✅ Article '{new_name}' ajouté dans '{selected_category}' !")
-                            st.cache_data.clear()
-                            st.rerun()
+                        st.error("❌ **Nom invalide** : Veuillez renseigner un nom d'article d'au moins 2 caractères")
+                    # Vérification de l'unicité du nom
+                    elif new_name in current_prices.get(selected_category, {}):
+                        st.error(f"❌ **Nom déjà existant** : L'article '{new_name}' existe déjà dans '{selected_category}'")
+                    # Validations spécifiques par catégorie
+                    elif selected_category == "panneaux":
+                        if new_item.get("puissance", 0) <= 0:
+                            st.error("❌ **Puissance invalide** : La puissance du panneau doit être supérieure à 0W")
+                        elif new_item.get("prix", 0) <= 0:
+                            st.error("❌ **Prix invalide** : Le prix doit être supérieur à 0 FCFA")
                         else:
-                            st.error("❌ Erreur lors de l'ajout de l'article")
+                            # Validation réussie pour panneaux
+                            updated_prices = current_prices.copy()
+                            if selected_category not in updated_prices:
+                                updated_prices[selected_category] = {}
+                            updated_prices[selected_category][new_name] = new_item
+                            if save_equipment_prices(updated_prices):
+                                st.success(f"✅ **Panneau ajouté !** '{new_name}' dans '{selected_category}'")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("❌ Erreur lors de l'ajout de l'article")
+                    elif selected_category == "batteries":
+                        if new_item.get("voltage", 0) <= 0:
+                            st.error("❌ **Voltage invalide** : Le voltage doit être supérieur à 0V")
+                        elif new_item.get("capacite", 0) <= 0 and new_item.get("kwh", 0) <= 0:
+                            st.error("❌ **Capacité invalide** : La capacité doit être supérieure à 0")
+                        elif new_item.get("prix", 0) <= 0:
+                            st.error("❌ **Prix invalide** : Le prix doit être supérieur à 0 FCFA")
+                        elif new_item.get("cycles", 0) <= 0:
+                            st.error("❌ **Cycles invalides** : Le nombre de cycles doit être supérieur à 0")
+                        elif not (0 < new_item.get("decharge_max", 0) <= 100):
+                            st.error("❌ **Décharge invalide** : La décharge max doit être entre 1% et 100%")
+                        else:
+                            # Validation réussie pour batteries
+                            updated_prices = current_prices.copy()
+                            if selected_category not in updated_prices:
+                                updated_prices[selected_category] = {}
+                            updated_prices[selected_category][new_name] = new_item
+                            if save_equipment_prices(updated_prices):
+                                st.success(f"✅ **Batterie ajoutée !** '{new_name}' dans '{selected_category}'")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("❌ Erreur lors de l'ajout de l'article")
+                    elif selected_category == "onduleurs":
+                        if new_item.get("puissance", 0) <= 0:
+                            st.error("❌ **Puissance invalide** : La puissance de l'onduleur doit être supérieure à 0W")
+                        elif new_item.get("voltage", 0) <= 0:
+                            st.error("❌ **Voltage invalide** : Le voltage d'entrée doit être supérieur à 0V")
+                        elif new_item.get("prix", 0) <= 0:
+                            st.error("❌ **Prix invalide** : Le prix doit être supérieur à 0 FCFA")
+                        else:
+                            # Validation réussie pour onduleurs
+                            updated_prices = current_prices.copy()
+                            if selected_category not in updated_prices:
+                                updated_prices[selected_category] = {}
+                            updated_prices[selected_category][new_name] = new_item
+                            if save_equipment_prices(updated_prices):
+                                st.success(f"✅ **Onduleur ajouté !** '{new_name}' dans '{selected_category}'")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("❌ Erreur lors de l'ajout de l'article")
+                    elif selected_category == "regulateurs":
+                        if new_item.get("amperage", 0) <= 0:
+                            st.error("❌ **Ampérage invalide** : L'ampérage doit être supérieur à 0A")
+                        elif new_item.get("voltage_max", 0) <= 0:
+                            st.error("❌ **Voltage max invalide** : Le voltage max doit être supérieur à 0V")
+                        elif new_item.get("prix", 0) <= 0:
+                            st.error("❌ **Prix invalide** : Le prix doit être supérieur à 0 FCFA")
+                        else:
+                            # Validation réussie pour régulateurs
+                            updated_prices = current_prices.copy()
+                            if selected_category not in updated_prices:
+                                updated_prices[selected_category] = {}
+                            updated_prices[selected_category][new_name] = new_item
+                            if save_equipment_prices(updated_prices):
+                                st.success(f"✅ **Régulateur ajouté !** '{new_name}' dans '{selected_category}'")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("❌ Erreur lors de l'ajout de l'article")
+                    else:
+                        # Catégorie générique
+                        if new_item.get("prix", 0) <= 0:
+                            st.error("❌ **Prix invalide** : Le prix doit être supérieur à 0 FCFA")
+                        else:
+                            updated_prices = current_prices.copy()
+                            if selected_category not in updated_prices:
+                                updated_prices[selected_category] = {}
+                            updated_prices[selected_category][new_name] = new_item
+                            if save_equipment_prices(updated_prices):
+                                st.success(f"✅ **Article ajouté !** '{new_name}' dans '{selected_category}'")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("❌ Erreur lors de l'ajout de l'article")
             
             # Réinitialisation seulement
             st.markdown("---")
@@ -4580,7 +4799,7 @@ if is_user_authenticated() and is_admin_user():
                 "⚡ Section Câbles", 
                 "🔌 Disjoncteurs", 
                 "🔋 Autonomie", 
-                "📐 Dimensionnement"
+                "💰 Rentabilité"
             ])
             
             # Calculateur de section de câbles
@@ -4815,129 +5034,178 @@ if is_user_authenticated() and is_admin_user():
                     else:
                         st.success("✅ Autonomie correcte pour usage standard")
             
-            # Calculateur de dimensionnement rapide
+            # Calculateur de rentabilité solaire
             with calc_tab4:
-                st.markdown("### 📐 Dimensionnement Rapide")
-                st.info("Estimation rapide des composants principaux pour une installation solaire.")
+                st.markdown("### 💰 Calculateur de Rentabilité Solaire")
+                st.info("Analysez la rentabilité financière de votre installation solaire et calculez le retour sur investissement.")
                 
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    st.markdown("**Besoins énergétiques**")
-                    consommation_rapide = st.number_input("Consommation journalière (kWh)", min_value=0.1, max_value=100.0, value=8.0, step=0.1)
-                    autonomie_rapide = st.selectbox("Autonomie souhaitée", ["1 jour", "2 jours", "3 jours", "5 jours"], index=2)
-                    region = st.selectbox("Région", ["Dakar", "Thiès", "Saint-Louis", "Kaolack", "Ziguinchor", "Tambacounda"], index=0)
+                    st.markdown("**💡 Installation solaire**")
+                    cout_installation = st.number_input("Coût total installation (FCFA)", min_value=500000, max_value=50000000, value=3000000, step=100000)
+                    puissance_installee = st.number_input("Puissance installée (kWc)", min_value=0.5, max_value=100.0, value=5.0, step=0.5)
+                    production_annuelle = st.number_input("Production annuelle estimée (kWh)", min_value=500, max_value=200000, value=8000, step=100)
                     
                 with col2:
-                    st.markdown("**Type d'installation**")
-                    type_installation = st.selectbox("Type", ["Résidentiel", "Commercial", "Industriel"], index=0)
-                    backup_reseau = st.checkbox("Backup réseau électrique", value=True)
-                    marge_securite = st.slider("Marge de sécurité (%)", min_value=10, max_value=50, value=20, step=5)
+                    st.markdown("**⚡ Situation énergétique actuelle**")
+                    facture_mensuelle = st.number_input("Facture électricité mensuelle (FCFA)", min_value=5000, max_value=500000, value=45000, step=5000)
+                    prix_kwh_senelec = st.number_input("Prix kWh SENELEC (FCFA)", min_value=80, max_value=200, value=118, step=1)
+                    augmentation_annuelle = st.slider("Augmentation annuelle prix électricité (%)", min_value=0.0, max_value=15.0, value=5.0, step=0.5)
                 
-                if st.button("🔍 Dimensionner rapidement", type="primary"):
-                    # Paramètres par région (heures d'ensoleillement moyen)
-                    ensoleillement = {
-                        "Dakar": 5.5, "Thiès": 5.8, "Saint-Louis": 6.2,
-                        "Kaolack": 5.9, "Ziguinchor": 5.3, "Tambacounda": 6.0
-                    }
+                col3, col4 = st.columns(2)
+                
+                with col3:
+                    st.markdown("**🔧 Paramètres techniques**")
+                    degradation_annuelle = st.slider("Dégradation panneaux (%/an)", min_value=0.3, max_value=1.0, value=0.5, step=0.1)
+                    cout_maintenance = st.number_input("Coût maintenance annuel (FCFA)", min_value=0, max_value=200000, value=50000, step=10000)
+                    duree_vie = st.selectbox("Durée de vie système (années)", [15, 20, 25, 30], index=2)
                     
-                    # Facteurs selon le type d'installation
-                    facteurs = {
-                        "Résidentiel": {"rendement": 0.85, "facteur_charge": 0.7},
-                        "Commercial": {"rendement": 0.88, "facteur_charge": 0.8},
-                        "Industriel": {"rendement": 0.90, "facteur_charge": 0.9}
-                    }
+                with col4:
+                    st.markdown("**💼 Paramètres financiers**")
+                    taux_actualisation = st.slider("Taux d'actualisation (%)", min_value=3.0, max_value=12.0, value=6.0, step=0.5)
+                    subvention = st.number_input("Subventions/Aides (FCFA)", min_value=0, max_value=2000000, value=0, step=50000)
+                    revente_surplus = st.checkbox("Revente surplus possible", value=False)
+                    if revente_surplus:
+                        prix_revente = st.number_input("Prix revente (FCFA/kWh)", min_value=50, max_value=150, value=80, step=5)
+                    else:
+                        prix_revente = 0
+                
+                if st.button("📊 Calculer la rentabilité", type="primary"):
+                    # Calculs de rentabilité
+                    cout_net_installation = cout_installation - subvention
+                    facture_annuelle_actuelle = facture_mensuelle * 12
                     
-                    # Calculs
-                    heures_soleil = ensoleillement[region]
-                    rendement_systeme = facteurs[type_installation]["rendement"]
-                    facteur_charge = facteurs[type_installation]["facteur_charge"]
+                    # Calcul des économies annuelles
+                    economies_annuelles = []
+                    productions_annuelles = []
+                    couts_maintenance_cumules = []
                     
-                    # Puissance panneaux
-                    consommation_avec_marge = consommation_rapide * (1 + marge_securite / 100)
-                    puissance_panneaux_kwc = consommation_avec_marge / (heures_soleil * rendement_systeme)
+                    for annee in range(1, duree_vie + 1):
+                        # Production dégradée
+                        production_degradee = production_annuelle * ((1 - degradation_annuelle/100) ** (annee - 1))
+                        productions_annuelles.append(production_degradee)
+                        
+                        # Prix électricité avec augmentation
+                        prix_kwh_annee = prix_kwh_senelec * ((1 + augmentation_annuelle/100) ** (annee - 1))
+                        
+                        # Économies sur facture
+                        economie_facture = min(production_degradee * prix_kwh_annee, facture_annuelle_actuelle * ((1 + augmentation_annuelle/100) ** (annee - 1)))
+                        
+                        # Revenus de revente (si applicable)
+                        if revente_surplus:
+                            surplus = max(0, production_degradee - (facture_annuelle_actuelle / prix_kwh_senelec))
+                            revenus_revente = surplus * prix_revente
+                        else:
+                            revenus_revente = 0
+                        
+                        # Économies totales moins maintenance
+                        economie_nette = economie_facture + revenus_revente - cout_maintenance
+                        economies_annuelles.append(economie_nette)
+                        couts_maintenance_cumules.append(cout_maintenance * annee)
                     
-                    # Nombre de panneaux (en supposant 400W par panneau)
-                    puissance_panneau_unitaire = 0.4  # 400W
-                    nb_panneaux = math.ceil(puissance_panneaux_kwc / puissance_panneau_unitaire)
-                    puissance_reelle_kwc = nb_panneaux * puissance_panneau_unitaire
+                    # Calcul du retour sur investissement
+                    flux_cumules = []
+                    flux_actualises = []
+                    cumul = -cout_net_installation
                     
-                    # Batteries
-                    jours_auto = int(autonomie_rapide.split()[0])
-                    capacite_batterie_kwh = consommation_avec_marge * jours_auto / 0.8  # 80% de décharge max
+                    for i, economie in enumerate(economies_annuelles):
+                        cumul += economie
+                        flux_cumules.append(cumul)
+                        
+                        # Flux actualisé
+                        flux_actualise = economie / ((1 + taux_actualisation/100) ** (i + 1))
+                        flux_actualises.append(flux_actualise)
                     
-                    # Onduleur (puissance de pointe estimée)
-                    puissance_onduleur_w = consommation_rapide * 1000 * facteur_charge
+                    # Temps de retour simple
+                    temps_retour = None
+                    for i, flux in enumerate(flux_cumules):
+                        if flux >= 0:
+                            temps_retour = i + 1
+                            break
                     
-                    # Régulateur MPPT
-                    tension_systeme = 48 if puissance_panneaux_kwc > 3 else (24 if puissance_panneaux_kwc > 1.5 else 12)
-                    courant_panneaux = (puissance_reelle_kwc * 1000) / tension_systeme
-                    amperage_regulateur = math.ceil(courant_panneaux * 1.25)  # Marge 25%
+                    # VAN (Valeur Actuelle Nette)
+                    van = sum(flux_actualises) - cout_net_installation
+                    
+                    # TRI approximatif (méthode simplifiée)
+                    economie_moyenne = sum(economies_annuelles) / len(economies_annuelles)
+                    tri_approx = (economie_moyenne / cout_net_installation) * 100
                     
                     # Affichage des résultats
-                    st.success("✅ Dimensionnement terminé")
+                    st.success("✅ Analyse de rentabilité terminée")
                     
-                    # Résultats principaux
-                    col_res1, col_res2 = st.columns(2)
+                    # Métriques principales
+                    col_res1, col_res2, col_res3, col_res4 = st.columns(4)
                     
                     with col_res1:
-                        st.markdown("**🌞 Panneaux solaires**")
-                        st.metric("Puissance totale", f"{puissance_reelle_kwc:.1f} kWc")
-                        st.metric("Nombre de panneaux", f"{nb_panneaux} x 400W")
-                        st.metric("Production journalière", f"{puissance_reelle_kwc * heures_soleil * rendement_systeme:.1f} kWh")
-                        
-                        st.markdown("**🔋 Batteries**")
-                        st.metric("Capacité recommandée", f"{capacite_batterie_kwh:.1f} kWh")
-                        if tension_systeme == 48:
-                            nb_batteries_48v = math.ceil(capacite_batterie_kwh / 2.4)  # Batteries 48V 50Ah
-                            st.metric("Configuration suggérée", f"{nb_batteries_48v} x 48V 50Ah")
+                        if temps_retour:
+                            st.metric("⏱️ Temps de retour", f"{temps_retour} ans")
                         else:
-                            nb_batteries_12v = math.ceil(capacite_batterie_kwh / 1.2)  # Batteries 12V 100Ah
-                            st.metric("Configuration suggérée", f"{nb_batteries_12v} x 12V 100Ah")
-                    
+                            st.metric("⏱️ Temps de retour", "> 25 ans")
+                        
                     with col_res2:
-                        st.markdown("**🔌 Onduleur**")
-                        st.metric("Puissance recommandée", f"{puissance_onduleur_w:.0f} W")
-                        st.metric("Tension système", f"{tension_systeme} V")
-                        if backup_reseau:
-                            st.metric("Type recommandé", "Hybride")
-                        else:
-                            st.metric("Type recommandé", "Off-Grid")
+                        st.metric("💰 VAN", f"{van:,.0f} FCFA")
                         
-                        st.markdown("**⚡ Régulateur MPPT**")
-                        st.metric("Ampérage recommandé", f"{amperage_regulateur} A")
-                        st.metric("Tension max", f"{tension_systeme * 2} V")
+                    with col_res3:
+                        st.metric("📈 TRI approximatif", f"{tri_approx:.1f}%")
+                        
+                    with col_res4:
+                        economies_totales = sum(economies_annuelles)
+                        st.metric("💵 Économies 25 ans", f"{economies_totales:,.0f} FCFA")
                     
-                    # Estimation des coûts (approximative)
+                    # Graphique des flux de trésorerie
                     st.markdown("---")
-                    st.markdown("**💰 Estimation budgétaire (approximative):**")
+                    st.markdown("**📈 Évolution des flux de trésorerie cumulés**")
                     
-                    # Prix approximatifs en FCFA
-                    prix_panneau_400w = 150000
-                    prix_batterie_kwh = 200000  # Prix moyen par kWh
-                    prix_onduleur_w = 300  # Prix par watt
-                    prix_regulateur_a = 15000  # Prix par ampère
+                    import pandas as pd
+                    df_flux = pd.DataFrame({
+                        'Année': list(range(0, duree_vie + 1)),
+                        'Flux cumulés (FCFA)': [-cout_net_installation] + flux_cumules
+                    })
                     
-                    cout_panneaux = nb_panneaux * prix_panneau_400w
-                    cout_batteries = capacite_batterie_kwh * prix_batterie_kwh
-                    cout_onduleur = puissance_onduleur_w * prix_onduleur_w
-                    cout_regulateur = amperage_regulateur * prix_regulateur_a
-                    cout_accessoires = (cout_panneaux + cout_batteries + cout_onduleur + cout_regulateur) * 0.15  # 15% accessoires
+                    st.line_chart(df_flux.set_index('Année'))
                     
-                    cout_total = cout_panneaux + cout_batteries + cout_onduleur + cout_regulateur + cout_accessoires
+                    # Analyse détaillée
+                    st.markdown("**📋 Analyse détaillée:**")
                     
-                    col_cout1, col_cout2, col_cout3 = st.columns(3)
-                    with col_cout1:
-                        st.metric("Panneaux", f"{cout_panneaux:,.0f} FCFA")
-                        st.metric("Batteries", f"{cout_batteries:,.0f} FCFA")
-                    with col_cout2:
-                        st.metric("Onduleur", f"{cout_onduleur:,.0f} FCFA")
-                        st.metric("Régulateur", f"{cout_regulateur:,.0f} FCFA")
-                    with col_cout3:
-                        st.metric("Accessoires", f"{cout_accessoires:,.0f} FCFA")
-                        st.metric("**TOTAL**", f"**{cout_total:,.0f} FCFA**")
+                    col_analyse1, col_analyse2 = st.columns(2)
                     
-                    st.caption("💡 Prix indicatifs - Demandez un devis détaillé pour votre projet spécifique")
+                    with col_analyse1:
+                        st.write(f"• **Investissement net:** {cout_net_installation:,.0f} FCFA")
+                        st.write(f"• **Production 1ère année:** {production_annuelle:,.0f} kWh")
+                        st.write(f"• **Économie 1ère année:** {economies_annuelles[0]:,.0f} FCFA")
+                        st.write(f"• **Coût maintenance total:** {cout_maintenance * duree_vie:,.0f} FCFA")
+                        
+                    with col_analyse2:
+                        if van > 0:
+                            st.success("✅ **Projet rentable** - VAN positive")
+                        else:
+                            st.error("❌ **Projet non rentable** - VAN négative")
+                            
+                        if temps_retour and temps_retour <= 10:
+                            st.success(f"✅ **Retour rapide** - {temps_retour} ans")
+                        elif temps_retour and temps_retour <= 15:
+                            st.warning(f"⚠️ **Retour moyen** - {temps_retour} ans")
+                        else:
+                            st.error("❌ **Retour trop long** - > 15 ans")
+                    
+                    # Recommandations
+                    st.markdown("---")
+                    st.markdown("**💡 Recommandations:**")
+                    
+                    if van > 0 and temps_retour and temps_retour <= 12:
+                        st.success("🎯 **Excellent investissement** - Procédez à l'installation")
+                    elif van > 0:
+                        st.info("👍 **Bon investissement** - Rentable sur le long terme")
+                    else:
+                        st.warning("⚠️ **Investissement à reconsidérer** - Optimisez les paramètres")
+                        st.write("Suggestions d'amélioration:")
+                        st.write("- Rechercher des subventions supplémentaires")
+                        st.write("- Optimiser la taille de l'installation")
+                        st.write("- Négocier le prix d'installation")
+                        st.write("- Considérer la revente du surplus")
+                    
+                    st.caption("💡 Analyse basée sur les données fournies - Consultez un expert pour validation")
 
             # Historique déplacé dans l'onglet Admin → 🕘 Historique
 
